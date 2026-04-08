@@ -1,6 +1,6 @@
 # Chia Simulator Docker
 
-Local Chia blockchain simulator with coinset.org and Goby wallet compatible HTTP API. Starts in seconds with pre-baked plots and keys.
+Local Chia blockchain simulator with full Goby wallet backend and coinset.org-compatible HTTP API. Starts in seconds with pre-baked plots and keys.
 
 ## Quick Start
 
@@ -12,28 +12,33 @@ curl http://localhost:3000/healthz
 
 ## Web UI
 
-Open `http://localhost:3000` for an interactive API playground.
+Open `http://localhost:3000` for an interactive API playground with all endpoints.
 
 ## Goby Wallet
 
-Compatible with the [Goby](https://www.goby.app/) Chrome extension. Point Goby to `http://localhost:3000` (or your LAN IP) to:
+Compatible with the [Goby](https://www.goby.app/) Chrome extension. Full wallet functionality:
 
 - View XCH balance
 - Send XCH transactions
 - View UTXOs / coins
 - Estimate fees
+- NFT/DID indexing (via built-in watcher)
 
-### Goby /v1/ Endpoints
-- `POST /v1/chia_rpc` — RPC wrapper `{method, params}`
-- `GET /v1/utxos?address=txch1...` — Unspent coins
-- `GET /v1/balance?address=txch1...` — Total balance
-- `POST /v1/sendtx` — Submit spend bundle
-- `POST /v1/fee_estimate` — Fee estimates
-- `GET /v1/assets?address=txch1...` — NFT/DID assets (empty on simulator)
+### Connecting Goby
+
+> **Important**: Goby does not accept `localhost`. Use your LAN IP or a domain with SSL.
+
+1. Find your LAN IP (e.g. `192.168.1.100`)
+2. In Goby extension settings, set the RPC URL to: `http://192.168.1.100:3000`
+3. Select the **Testnet** network in Goby (address prefix `txch`)
+
+For production/remote access, put the API behind a reverse proxy with SSL (e.g. nginx + Let's Encrypt).
 
 ### Fund a test wallet
+
+Copy your Goby `txch1...` address and run:
 ```bash
-curl -X POST http://localhost:3000/fund_wallet \
+curl -X POST http://192.168.1.100:3000/fund_wallet \
   -H "Content-Type: application/json" \
   -d '{"address": "txch1...", "amount": 100}'
 ```
@@ -83,6 +88,15 @@ curl -X POST http://localhost:3000/set_config \
 - `POST /push_tx`
 - `POST /get_fee_estimate`
 - `POST /get_routes`
+
+### Goby /v1/ (full wallet backend)
+- `POST /v1/chia_rpc` — RPC wrapper `{method, params}`
+- `GET /v1/utxos?address=txch1...` — Unspent coins
+- `GET /v1/balance?address=txch1...` — Total balance
+- `POST /v1/sendtx` — Submit spend bundle
+- `POST /v1/fee_estimate` — Fee estimates
+- `GET /v1/assets?address=txch1...` — NFT/DID assets
+- `GET /v1/latest_singleton?singleton_id=0x...` — Singleton tracking
 
 ### Simulator-only
 - `POST /farm_block` — Farm a block to an address
