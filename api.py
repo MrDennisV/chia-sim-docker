@@ -120,6 +120,14 @@ ENDPOINT_GROUPS = {
         {"name": "revert_blocks", "body": '{"num_of_blocks": 1}', "desc": "Revert last N blocks"},
         {"name": "get_all_puzzle_hashes", "body": "{}", "desc": "All puzzle hashes with balances"},
     ],
+    "Goby v1": [
+        {"name": "v1/chia_rpc", "body": '{"method": "get_blockchain_state", "params": {}}', "desc": "Goby RPC wrapper"},
+        {"name": "v1/utxos", "body": '{"address": "txch1..."}', "desc": "UTXOs for address"},
+        {"name": "v1/balance", "body": '{"address": "txch1..."}', "desc": "Balance for address"},
+        {"name": "v1/sendtx", "body": '{"spend_bundle": {}}', "desc": "Send transaction"},
+        {"name": "v1/fee_estimate", "body": '{"cost": 1000000}', "desc": "Fee estimate"},
+        {"name": "v1/assets", "body": '{"address": "txch1..."}', "desc": "NFT/DID assets"},
+    ],
     "Config": [
         {"name": "get_config", "body": "{}", "desc": "Get simulator config"},
         {"name": "set_config", "body": '{"block_interval": 5}', "desc": "Set block interval (0=auto-farm on tx, >0=periodic seconds)"},
@@ -128,10 +136,13 @@ ENDPOINT_GROUPS = {
     ],
 }
 
+_SKIP_AUTO_ROUTE = {"fund_wallet", "get_config", "set_config", "logs/node", "logs/api",
+                     "v1/chia_rpc", "v1/utxos", "v1/balance", "v1/sendtx",
+                     "v1/fee_estimate", "v1/assets"}
 for group in ENDPOINT_GROUPS.values():
     for ep in group:
         n = ep["name"]
-        if n not in ("fund_wallet", "get_config", "set_config"):
+        if n not in _SKIP_AUTO_ROUTE:
             app.add_api_route(f"/{n}", route(n), methods=["POST"])
 
 # --- fund_wallet ---
@@ -240,6 +251,157 @@ async def logs_api(lines: int = 50, level: str = ""):
     return _read_log(API_LOG, lines, level)
 
 
+# --- Goby /v1/ endpoints ---
+
+NETWORK_PREFIX = "txch"
+
+RPC_WHITE_LIST = {
+    "get_puzzle_and_solution", "get_coin_records_by_puzzle_hash",
+    "get_coin_records_by_puzzle_hashes", "get_coin_record_by_name",
+    "get_coin_records_by_names", "get_coin_records_by_parent_ids",
+    "get_blockchain_state", "get_block_record_by_height", "get_network_info",
+    "get_all_mempool_tx_ids", "get_mempool_item_by_tx_id",
+    "get_coin_records_by_hint", "get_additions_and_removals",
+    "push_tx", "get_fee_estimate", "get_mempool_items_by_coin_name",
+    "get_all_mempool_items", "get_block", "get_blocks", "get_block_record",
+    "get_block_records", "get_block_spends", "get_routes",
+}
+
+
+def _bech32_to_puzzle_hash(address: str) -> str:
+    """Decode txch/xch bech32m address to 0x-prefixed puzzle hash hex."""
+    # Inline bech32m decode to avoid importing chia modules
+    CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+    _, data_part = address.rsplit("1", 1)
+    values = [CHARSET.find(c) for c in data_part]
+    # Convert 5-bit groups to 8-bit
+    acc, bits, result = 0, 0, []
+    for v in values[:-6]:  # strip checksum
+        acc = (acc << 5) | v
+        bits += 5
+        while bits >= 8:
+            bits -= 8
+            result.append((acc >> bits) & 0xFF)
+    return "0x" + bytes(result).hex()
+
+
+@app.post("/v1/chia_rpc")
+async def goby_chia_rpc(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "Invalid JSON"}, 400)
+    method = body.get("method")
+    params = body.get("params") or {}
+    if method not in RPC_WHITE_LIST:
+        return JSONResponse({"detail": f"unsupported rpc method: {method}"}, 400)
+    try:
+        return JSONResponse(rpc(method, params))
+    except Exception as e:
+        return JSONResponse({"detail": str(e)}, 500)
+
+
+@app.get("/v1/utxos")
+async def goby_utxos(address: str):
+    try:
+        ph = _bech32_to_puzzle_hash(address)
+    except Exception:
+        return JSONResponse({"detail": "Invalid Address"}, 400)
+    try:
+        resp = rpc("get_coin_records_by_puzzle_hash", {
+            "puzzle_hash": ph, "include_spent_coins": False
+        })
+        data = []
+        for row in resp.get("coin_records", []):
+            if row.get("spent"):
+                continue
+            coin = row["coin"]
+            data.append({
+                "parent_coin_info": coin["parent_coin_info"],
+                "puzzle_hash": coin["puzzle_hash"],
+                "amount": str(coin["amount"]),
+            })
+        return data
+    except Exception as e:
+        return JSONResponse({"detail": str(e)}, 500)
+
+
+@app.get("/v1/balance")
+async def goby_balance(address: str):
+    try:
+        ph = _bech32_to_puzzle_hash(address)
+    except Exception:
+        return JSONResponse({"detail": "Invalid Address"}, 400)
+    try:
+        resp = rpc("get_coin_records_by_puzzle_hash", {
+            "puzzle_hash": ph, "include_spent_coins": False
+        })
+        amount = 0
+        coin_num = 0
+        for row in resp.get("coin_records", []):
+            if row.get("spent"):
+                continue
+            amount += row["coin"]["amount"]
+            coin_num += 1
+        return {"amount": amount, "coin_num": coin_num}
+    except Exception as e:
+        return JSONResponse({"detail": str(e)}, 500)
+
+
+@app.post("/v1/sendtx")
+async def goby_sendtx(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "Invalid JSON"}, 400)
+    spend_bundle = body.get("spend_bundle")
+    if not spend_bundle:
+        return JSONResponse({"detail": "spend_bundle required"}, 400)
+    try:
+        resp = rpc("push_tx", {"spend_bundle": spend_bundle})
+        return {"status": resp.get("status", 1)}
+    except Exception as e:
+        return JSONResponse({"detail": str(e)}, 400)
+
+
+@app.post("/v1/fee_estimate")
+async def goby_fee_estimate(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "Invalid JSON"}, 400)
+    cost = body.get("cost", 0)
+    if cost <= 0:
+        return JSONResponse({"detail": "invalid cost"}, 400)
+    try:
+        resp = rpc("get_fee_estimate", {
+            "target_times": [30, 120, 300],
+            "cost": cost,
+            "spend_type": "send_xch_transaction",
+        })
+        estimates = resp.get("estimates", [0, 0, 0])
+        mempool_size = resp.get("mempool_size", 0)
+        mempool_max = resp.get("mempool_max_size", 0)
+        is_full = cost + mempool_size > mempool_max if mempool_max > 0 else False
+        if is_full:
+            min_fee = 5 * cost
+            estimates = [int(min_fee * 1.5), int(min_fee * 1.1), min_fee]
+        return {"estimates": estimates}
+    except Exception as e:
+        return JSONResponse({"detail": str(e)}, 500)
+
+
+@app.get("/v1/assets")
+async def goby_assets(address: str, asset_type: str = "nft", asset_id: str = None, offset: int = 0, limit: int = 10):
+    # Simulator doesn't have NFT/DID indexer — return empty list
+    return []
+
+
+@app.get("/v1/latest_singleton")
+async def goby_latest_singleton(singleton_id: str):
+    return JSONResponse({"detail": "not found"}, 404)
+
+
 # --- healthz ---
 
 
@@ -297,6 +459,7 @@ body{{background:var(--bg);color:var(--text);font-family:var(--font);font-size:1
 .badge-post{{background:#22c55e18;color:var(--accent)}}
 .badge-sim{{background:#f59e0b18;color:var(--sim)}}
 .badge-cfg{{background:#a78bfa18;color:var(--cfg)}}
+.badge-goby{{background:#3b82f618;color:var(--accent2)}}
 .health{{
   padding:8px 14px;border-top:1px solid var(--border);font-size:10px;
   color:var(--muted);display:flex;align-items:center;gap:6px;
@@ -405,7 +568,8 @@ const G={groups_json};
 let cur='get_blockchain_state';
 const simEps=['farm_block','set_auto_farming','get_auto_farming','revert_blocks','get_all_puzzle_hashes','fund_wallet'];
 const cfgEps=['get_config','set_config','logs'];
-const getEps=['logs/node','logs/api'];
+const gobyEps=['v1/chia_rpc','v1/utxos','v1/balance','v1/sendtx','v1/fee_estimate','v1/assets'];
+const getEps=['logs/node','logs/api','v1/utxos','v1/balance','v1/assets'];
 
 function buildNav(){{
   const nav=document.getElementById('nav');
@@ -413,10 +577,10 @@ function buildNav(){{
   for(const[group,eps]of Object.entries(G)){{
     html+='<div class="group-title">'+group+'</div>';
     for(const ep of eps){{
-      const isSim=simEps.includes(ep.name),isCfg=cfgEps.includes(ep.name);
+      const isSim=simEps.includes(ep.name),isCfg=cfgEps.includes(ep.name),isGoby=gobyEps.includes(ep.name);
       const isGet=getEps.includes(ep.name);
-      const bc=isCfg?'badge-cfg':isSim?'badge-sim':'badge-post';
-      const bl=isGet?'GET':isCfg?'CFG':isSim?'SIM':'POST';
+      const bc=isGoby?'badge-goby':isCfg?'badge-cfg':isSim?'badge-sim':'badge-post';
+      const bl=isGet?'GET':isGoby?'GOBY':isCfg?'CFG':isSim?'SIM':'POST';
       const esc=ep.body.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
       html+='<button class="ep-btn'+(ep.name===cur?' active':'')+'" data-ep="'+ep.name+'" data-body="'+esc+'" data-desc="'+ep.desc+'" onclick="sel(this)"><span class="badge '+bc+'">'+bl+'</span>'+ep.name+'</button>';
     }}
