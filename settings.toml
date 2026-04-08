@@ -1,0 +1,47 @@
+LOG_LEVEL = "INFO"
+
+SECONDS_PER_BLOCK = 5
+
+RPC_METHOD_WHITE_LIST = [
+    'get_puzzle_and_solution',
+    'get_coin_records_by_puzzle_hash',
+    'get_coin_records_by_puzzle_hashes',
+    'get_coin_record_by_name',
+    'get_coin_records_by_names',
+    'get_coin_records_by_parent_ids',
+    'get_blockchain_state',
+    'get_block_record_by_height',
+    'get_network_info',
+    'get_all_mempool_tx_ids',
+    'get_mempool_item_by_tx_id',
+    'get_coin_records_by_hint',
+    'get_additions_and_removals',
+    'push_tx',
+    'get_fee_estimate',
+    'get_mempool_items_by_coin_name',
+    'get_all_mempool_items',
+    'get_block',
+    'get_blocks',
+    'get_block_record',
+    'get_block_records',
+    'get_block_spends',
+    'get_coin_records_by_puzzle_hashes',
+    'get_routes',
+    'farm_block',
+    'set_auto_farming',
+    'get_auto_farming',
+    'revert_blocks',
+    'get_all_puzzle_hashes',
+]
+
+[CACHE]
+cache="aiocache.SimpleMemoryCache"
+
+[SUPPORTED_CHAINS]
+[SUPPORTED_CHAINS.simulator]
+id = 2
+network_name = "simulator0"
+network_prefix = "txch"
+rpc_url_or_chia_path = "/root/.chia/simulator/main"
+database_uri = "sqlite+aiosqlite:///data/wallet_simulator.db"
+enable = true

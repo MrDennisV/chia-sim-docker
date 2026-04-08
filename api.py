@@ -1,9 +1,19 @@
+"""
+Combined API: Goby wallet backend + Simulator endpoints + Web UI
+"""
 import json, ssl, os, logging, time
 import urllib.request
 import yaml
+
+# Set working directory for settings.toml and openapi module
+os.chdir("/app")
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
+
+# Import Goby app and mount it
+from openapi.api import app as goby_app, RPC_METHOD_WHITE_LIST
 
 CHIA_ROOT = os.getenv("CHIA_ROOT", "/root/.chia/simulator/main")
 RUNTIME_CONFIG = "/tmp/sim_runtime.json"
@@ -17,15 +27,17 @@ RPC_URL = f"https://localhost:{RPC_PORT}"
 CERT = f"{CHIA_ROOT}/config/ssl/full_node/private_full_node.crt"
 KEY = f"{CHIA_ROOT}/config/ssl/full_node/private_full_node.key"
 
-app = FastAPI(title="Chia Simulator API", docs_url=None, redoc_url=None)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+# Use Goby's app as the main app
+app = goby_app
 
 # API logger
-_api_logger = logging.getLogger("api")
+_api_logger = logging.getLogger("sim_api")
 _api_logger.setLevel(logging.INFO)
 _api_handler = logging.FileHandler("/tmp/api.log")
 _api_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
 _api_logger.addHandler(_api_handler)
+
+_SKIP_LOG_PATHS = {"/healthz", "/logs/api", "/logs/node", "/", "/v1/chia_rpc"}
 
 
 @app.middleware("http")
@@ -33,12 +45,15 @@ async def log_requests(request: Request, call_next):
     t0 = time.time()
     response = await call_next(request)
     ms = round((time.time() - t0) * 1000)
-    if request.url.path not in ("/healthz", "/logs/api", "/logs/node", "/"):
-        _api_logger.info(f"{request.method} {request.url.path} {response.status_code} {ms}ms")
+    path = request.url.path
+    if path not in _SKIP_LOG_PATHS:
+        _api_logger.info(f"{request.method} {path} {response.status_code} {ms}ms")
     if response.status_code >= 400:
-        _api_logger.warning(f"{request.method} {request.url.path} {response.status_code} {ms}ms")
+        _api_logger.warning(f"{request.method} {path} {response.status_code} {ms}ms")
     return response
 
+
+# --- RPC helper for simulator-only endpoints ---
 
 def rpc(path: str, body: dict | None = None) -> dict:
     if body is None:
@@ -68,84 +83,7 @@ def _write_runtime(cfg):
         json.dump(cfg, f)
 
 
-def route(path: str):
-    async def handler(request: Request):
-        try:
-            body = await request.json()
-        except Exception:
-            body = {}
-        try:
-            return JSONResponse(rpc(path, body))
-        except Exception as e:
-            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
-
-    return handler
-
-
-ENDPOINT_GROUPS = {
-    "Full Node": [
-        {"name": "get_blockchain_state", "body": "{}", "desc": "Current blockchain state"},
-        {"name": "get_network_info", "body": "{}", "desc": "Network name and prefix"},
-        {"name": "get_block_record_by_height", "body": '{"height": 1}', "desc": "Block record at height"},
-        {"name": "get_block_record", "body": '{"header_hash": "0x..."}', "desc": "Block record by header hash"},
-        {"name": "get_block_records", "body": '{"start": 0, "end": 5}', "desc": "Block records in range"},
-        {"name": "get_block", "body": '{"header_hash": "0x..."}', "desc": "Full block by header hash"},
-        {"name": "get_blocks", "body": '{"start": 0, "end": 5}', "desc": "Full blocks in range"},
-        {"name": "get_block_spends", "body": '{"header_hash": "0x..."}', "desc": "Spends in a block"},
-        {"name": "get_additions_and_removals", "body": '{"header_hash": "0x..."}', "desc": "Coins added/removed in block"},
-        {"name": "get_routes", "body": "{}", "desc": "List all available RPC routes"},
-        {"name": "get_fee_estimate", "body": '{"target_times": [60, 120, 300], "spend_type": "send_xch_transaction"}', "desc": "Fee estimates"},
-    ],
-    "Coins": [
-        {"name": "get_coin_record_by_name", "body": '{"name": "0x..."}', "desc": "Coin by ID"},
-        {"name": "get_coin_records_by_names", "body": '{"names": ["0x..."], "include_spent_coins": false}', "desc": "Coins by IDs"},
-        {"name": "get_coin_records_by_puzzle_hash", "body": '{"puzzle_hash": "0x...", "include_spent_coins": false}', "desc": "Coins by puzzle hash"},
-        {"name": "get_coin_records_by_puzzle_hashes", "body": '{"puzzle_hashes": ["0x..."], "include_spent_coins": false}', "desc": "Coins by puzzle hashes"},
-        {"name": "get_coin_records_by_parent_ids", "body": '{"parent_ids": ["0x..."], "include_spent_coins": false}', "desc": "Coins by parent IDs"},
-        {"name": "get_coin_records_by_hint", "body": '{"hint": "0x...", "include_spent_coins": false}', "desc": "Coins by hint"},
-        {"name": "get_puzzle_and_solution", "body": '{"coin_id": "0x...", "height": 1}', "desc": "Puzzle & solution for spent coin"},
-    ],
-    "Mempool": [
-        {"name": "get_mempool_item_by_tx_id", "body": '{"tx_id": "0x..."}', "desc": "Mempool item by tx ID"},
-        {"name": "get_mempool_items_by_coin_name", "body": '{"coin_name": "0x..."}', "desc": "Mempool items by coin"},
-        {"name": "get_all_mempool_tx_ids", "body": "{}", "desc": "All mempool transaction IDs"},
-        {"name": "get_all_mempool_items", "body": "{}", "desc": "All mempool items"},
-        {"name": "push_tx", "body": '{"spend_bundle": {}}', "desc": "Submit spend bundle"},
-    ],
-    "Simulator": [
-        {"name": "farm_block", "body": '{"address": "txch1...", "guarantee_tx_block": true}', "desc": "Farm a block"},
-        {"name": "fund_wallet", "body": '{"address": "txch1...", "amount": 10.0}', "desc": "Fund wallet with XCH"},
-        {"name": "set_auto_farming", "body": '{"auto_farm": true}', "desc": "Toggle auto-farming (use set_config instead)"},
-        {"name": "get_auto_farming", "body": "{}", "desc": "Auto-farming status"},
-        {"name": "revert_blocks", "body": '{"num_of_blocks": 1}', "desc": "Revert last N blocks"},
-        {"name": "get_all_puzzle_hashes", "body": "{}", "desc": "All puzzle hashes with balances"},
-    ],
-    "Goby v1": [
-        {"name": "v1/chia_rpc", "body": '{"method": "get_blockchain_state", "params": {}}', "desc": "Goby RPC wrapper"},
-        {"name": "v1/utxos", "body": '{"address": "txch1..."}', "desc": "UTXOs for address"},
-        {"name": "v1/balance", "body": '{"address": "txch1..."}', "desc": "Balance for address"},
-        {"name": "v1/sendtx", "body": '{"spend_bundle": {}}', "desc": "Send transaction"},
-        {"name": "v1/fee_estimate", "body": '{"cost": 1000000}', "desc": "Fee estimate"},
-        {"name": "v1/assets", "body": '{"address": "txch1..."}', "desc": "NFT/DID assets"},
-    ],
-    "Config": [
-        {"name": "get_config", "body": "{}", "desc": "Get simulator config"},
-        {"name": "set_config", "body": '{"block_interval": 5}', "desc": "Set block interval (0=auto-farm on tx, >0=periodic seconds)"},
-        {"name": "logs/node", "body": '{"lines": 50, "level": ""}', "desc": "Simulator full node logs"},
-        {"name": "logs/api", "body": '{"lines": 50, "level": ""}', "desc": "API request logs"},
-    ],
-}
-
-_SKIP_AUTO_ROUTE = {"fund_wallet", "get_config", "set_config", "logs/node", "logs/api",
-                     "v1/chia_rpc", "v1/utxos", "v1/balance", "v1/sendtx",
-                     "v1/fee_estimate", "v1/assets"}
-for group in ENDPOINT_GROUPS.values():
-    for ep in group:
-        n = ep["name"]
-        if n not in _SKIP_AUTO_ROUTE:
-            app.add_api_route(f"/{n}", route(n), methods=["POST"])
-
-# --- fund_wallet ---
+# --- Simulator endpoints (not in Goby) ---
 
 MOJO_PER_XCH = 1_000_000_000_000
 REWARD_PER_BLOCK = 2 * MOJO_PER_XCH
@@ -182,9 +120,6 @@ async def fund_wallet(request: Request):
     }
 
 
-# --- config ---
-
-
 @app.post("/get_config")
 async def get_config(request: Request):
     cfg = _read_runtime()
@@ -206,7 +141,6 @@ async def set_config(request: Request):
     cfg = _read_runtime()
     if "block_interval" in body:
         cfg["block_interval"] = max(0, int(body["block_interval"]))
-        # interval=0 means auto-farm on push_tx, >0 means periodic
         try:
             rpc("set_auto_farming", {"auto_farm": cfg["block_interval"] == 0})
         except Exception:
@@ -217,9 +151,16 @@ async def set_config(request: Request):
     return cfg
 
 
-# --- logs ---
+# --- Logs ---
 
-API_LOG = "/tmp/api.log"
+@app.get("/logs/node")
+async def logs_node(lines: int = 50, level: str = ""):
+    return _read_log(f"{CHIA_ROOT}/log/debug.log", lines, level)
+
+
+@app.get("/logs/api")
+async def logs_api(lines: int = 50, level: str = ""):
+    return _read_log("/tmp/api.log", lines, level)
 
 
 def _read_log(path: str, lines: int, level: str) -> dict:
@@ -241,169 +182,7 @@ def _read_log(path: str, lines: int, level: str) -> dict:
         return {"success": False, "error": str(e)}
 
 
-@app.get("/logs/node")
-async def logs_node(lines: int = 50, level: str = ""):
-    return _read_log(f"{CHIA_ROOT}/log/debug.log", lines, level)
-
-
-@app.get("/logs/api")
-async def logs_api(lines: int = 50, level: str = ""):
-    return _read_log(API_LOG, lines, level)
-
-
-# --- Goby /v1/ endpoints ---
-
-NETWORK_PREFIX = "txch"
-
-RPC_WHITE_LIST = {
-    "get_puzzle_and_solution", "get_coin_records_by_puzzle_hash",
-    "get_coin_records_by_puzzle_hashes", "get_coin_record_by_name",
-    "get_coin_records_by_names", "get_coin_records_by_parent_ids",
-    "get_blockchain_state", "get_block_record_by_height", "get_network_info",
-    "get_all_mempool_tx_ids", "get_mempool_item_by_tx_id",
-    "get_coin_records_by_hint", "get_additions_and_removals",
-    "push_tx", "get_fee_estimate", "get_mempool_items_by_coin_name",
-    "get_all_mempool_items", "get_block", "get_blocks", "get_block_record",
-    "get_block_records", "get_block_spends", "get_routes",
-}
-
-
-def _bech32_to_puzzle_hash(address: str) -> str:
-    """Decode txch/xch bech32m address to 0x-prefixed puzzle hash hex."""
-    # Inline bech32m decode to avoid importing chia modules
-    CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
-    _, data_part = address.rsplit("1", 1)
-    values = [CHARSET.find(c) for c in data_part]
-    # Convert 5-bit groups to 8-bit
-    acc, bits, result = 0, 0, []
-    for v in values[:-6]:  # strip checksum
-        acc = (acc << 5) | v
-        bits += 5
-        while bits >= 8:
-            bits -= 8
-            result.append((acc >> bits) & 0xFF)
-    return "0x" + bytes(result).hex()
-
-
-@app.post("/v1/chia_rpc")
-async def goby_chia_rpc(request: Request):
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"detail": "Invalid JSON"}, 400)
-    method = body.get("method")
-    params = body.get("params") or {}
-    if method not in RPC_WHITE_LIST:
-        return JSONResponse({"detail": f"unsupported rpc method: {method}"}, 400)
-    try:
-        return JSONResponse(rpc(method, params))
-    except Exception as e:
-        return JSONResponse({"detail": str(e)}, 500)
-
-
-@app.get("/v1/utxos")
-async def goby_utxos(address: str):
-    try:
-        ph = _bech32_to_puzzle_hash(address)
-    except Exception:
-        return JSONResponse({"detail": "Invalid Address"}, 400)
-    try:
-        resp = rpc("get_coin_records_by_puzzle_hash", {
-            "puzzle_hash": ph, "include_spent_coins": False
-        })
-        data = []
-        for row in resp.get("coin_records", []):
-            if row.get("spent"):
-                continue
-            coin = row["coin"]
-            data.append({
-                "parent_coin_info": coin["parent_coin_info"],
-                "puzzle_hash": coin["puzzle_hash"],
-                "amount": str(coin["amount"]),
-            })
-        return data
-    except Exception as e:
-        return JSONResponse({"detail": str(e)}, 500)
-
-
-@app.get("/v1/balance")
-async def goby_balance(address: str):
-    try:
-        ph = _bech32_to_puzzle_hash(address)
-    except Exception:
-        return JSONResponse({"detail": "Invalid Address"}, 400)
-    try:
-        resp = rpc("get_coin_records_by_puzzle_hash", {
-            "puzzle_hash": ph, "include_spent_coins": False
-        })
-        amount = 0
-        coin_num = 0
-        for row in resp.get("coin_records", []):
-            if row.get("spent"):
-                continue
-            amount += row["coin"]["amount"]
-            coin_num += 1
-        return {"amount": amount, "coin_num": coin_num}
-    except Exception as e:
-        return JSONResponse({"detail": str(e)}, 500)
-
-
-@app.post("/v1/sendtx")
-async def goby_sendtx(request: Request):
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"detail": "Invalid JSON"}, 400)
-    spend_bundle = body.get("spend_bundle")
-    if not spend_bundle:
-        return JSONResponse({"detail": "spend_bundle required"}, 400)
-    try:
-        resp = rpc("push_tx", {"spend_bundle": spend_bundle})
-        return {"status": resp.get("status", 1)}
-    except Exception as e:
-        return JSONResponse({"detail": str(e)}, 400)
-
-
-@app.post("/v1/fee_estimate")
-async def goby_fee_estimate(request: Request):
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"detail": "Invalid JSON"}, 400)
-    cost = body.get("cost", 0)
-    if cost <= 0:
-        return JSONResponse({"detail": "invalid cost"}, 400)
-    try:
-        resp = rpc("get_fee_estimate", {
-            "target_times": [30, 120, 300],
-            "cost": cost,
-            "spend_type": "send_xch_transaction",
-        })
-        estimates = resp.get("estimates", [0, 0, 0])
-        mempool_size = resp.get("mempool_size", 0)
-        mempool_max = resp.get("mempool_max_size", 0)
-        is_full = cost + mempool_size > mempool_max if mempool_max > 0 else False
-        if is_full:
-            min_fee = 5 * cost
-            estimates = [int(min_fee * 1.5), int(min_fee * 1.1), min_fee]
-        return {"estimates": estimates}
-    except Exception as e:
-        return JSONResponse({"detail": str(e)}, 500)
-
-
-@app.get("/v1/assets")
-async def goby_assets(address: str, asset_type: str = "nft", asset_id: str = None, offset: int = 0, limit: int = 10):
-    # Simulator doesn't have NFT/DID indexer — return empty list
-    return []
-
-
-@app.get("/v1/latest_singleton")
-async def goby_latest_singleton(singleton_id: str):
-    return JSONResponse({"detail": "not found"}, 404)
-
-
-# --- healthz ---
-
+# --- Healthz ---
 
 @app.get("/healthz")
 async def health():
@@ -416,7 +195,71 @@ async def health():
         return JSONResponse({"success": False, "error": str(e)}, 503)
 
 
+# --- Simulator RPC passthrough (farm_block, revert_blocks, etc.) ---
+# These are NOT in Goby's whitelist but useful for the simulator
+
+SIM_ONLY_ENDPOINTS = {"farm_block", "set_auto_farming", "get_auto_farming",
+                       "revert_blocks", "get_all_puzzle_hashes"}
+
+for _ep in SIM_ONLY_ENDPOINTS:
+    def _make_handler(ep_name):
+        async def handler(request: Request):
+            try:
+                body = await request.json()
+            except Exception:
+                body = {}
+            try:
+                return JSONResponse(rpc(ep_name, body))
+            except Exception as e:
+                return JSONResponse({"success": False, "error": str(e)}, 500)
+        return handler
+    app.add_api_route(f"/{_ep}", _make_handler(_ep), methods=["POST"])
+
+
 # --- Web UI ---
+
+ENDPOINT_GROUPS = {
+    "Full Node": [
+        {"name": "get_blockchain_state", "body": "{}", "desc": "Current blockchain state"},
+        {"name": "get_network_info", "body": "{}", "desc": "Network name and prefix"},
+        {"name": "get_block_record_by_height", "body": '{"height": 1}', "desc": "Block record at height"},
+        {"name": "get_block", "body": '{"header_hash": "0x..."}', "desc": "Full block by header hash"},
+        {"name": "get_additions_and_removals", "body": '{"header_hash": "0x..."}', "desc": "Coins added/removed"},
+        {"name": "get_fee_estimate", "body": '{"target_times": [60, 120, 300], "spend_type": "send_xch_transaction"}', "desc": "Fee estimates"},
+    ],
+    "Coins": [
+        {"name": "get_coin_record_by_name", "body": '{"name": "0x..."}', "desc": "Coin by ID"},
+        {"name": "get_coin_records_by_puzzle_hash", "body": '{"puzzle_hash": "0x...", "include_spent_coins": false}', "desc": "Coins by puzzle hash"},
+        {"name": "get_coin_records_by_hint", "body": '{"hint": "0x...", "include_spent_coins": false}', "desc": "Coins by hint"},
+        {"name": "get_puzzle_and_solution", "body": '{"coin_id": "0x...", "height": 1}', "desc": "Puzzle & solution"},
+    ],
+    "Mempool": [
+        {"name": "get_mempool_item_by_tx_id", "body": '{"tx_id": "0x..."}', "desc": "Mempool item by tx ID"},
+        {"name": "get_all_mempool_tx_ids", "body": "{}", "desc": "All mempool tx IDs"},
+        {"name": "push_tx", "body": '{"spend_bundle": {}}', "desc": "Submit spend bundle"},
+    ],
+    "Goby v1": [
+        {"name": "v1/chia_rpc", "body": '{"method": "get_blockchain_state", "params": {}}', "desc": "Goby RPC wrapper"},
+        {"name": "v1/utxos", "body": '{"address": "txch1..."}', "desc": "UTXOs for address"},
+        {"name": "v1/balance", "body": '{"address": "txch1..."}', "desc": "Balance for address"},
+        {"name": "v1/sendtx", "body": '{"spend_bundle": {}}', "desc": "Send transaction"},
+        {"name": "v1/fee_estimate", "body": '{"cost": 1000000}', "desc": "Fee estimate"},
+        {"name": "v1/assets", "body": '{"address": "txch1..."}', "desc": "NFT/DID assets"},
+    ],
+    "Simulator": [
+        {"name": "farm_block", "body": '{"address": "txch1...", "guarantee_tx_block": true}', "desc": "Farm a block"},
+        {"name": "fund_wallet", "body": '{"address": "txch1...", "amount": 10.0}', "desc": "Fund wallet with XCH"},
+        {"name": "revert_blocks", "body": '{"num_of_blocks": 1}', "desc": "Revert last N blocks"},
+        {"name": "get_all_puzzle_hashes", "body": "{}", "desc": "All puzzle hashes with balances"},
+    ],
+    "Config": [
+        {"name": "get_config", "body": "{}", "desc": "Get simulator config"},
+        {"name": "set_config", "body": '{"block_interval": 5}', "desc": "Set block interval"},
+        {"name": "logs/node", "body": '{"lines": 50, "level": ""}', "desc": "Simulator logs"},
+        {"name": "logs/api", "body": '{"lines": 50, "level": ""}', "desc": "API request logs"},
+    ],
+}
+
 
 @app.get("/", response_class=HTMLResponse)
 async def ui():
@@ -436,23 +279,14 @@ async def ui():
 }}
 *{{margin:0;padding:0;box-sizing:border-box}}
 body{{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px}}
-
-/* Layout */
 .layout{{display:flex;height:100vh}}
-.sidebar{{
-  width:260px;min-width:260px;background:var(--surface);border-right:1px solid var(--border);
-  display:flex;flex-direction:column;overflow:hidden;
-}}
+.sidebar{{width:260px;min-width:260px;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}}
 .sidebar-head{{padding:14px 16px 10px;border-bottom:1px solid var(--border)}}
 .sidebar-head h1{{font-size:13px;color:var(--accent);font-weight:600}}
 .sidebar-head h1 span{{color:var(--muted);font-weight:400}}
 .nav-scroll{{flex:1;overflow-y:auto;padding:4px 0}}
 .group-title{{font-size:9px;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted);padding:12px 14px 4px;font-weight:700}}
-.ep-btn{{
-  display:block;width:100%;text-align:left;background:none;border:none;
-  color:var(--text);padding:7px 14px;cursor:pointer;font-family:var(--font);
-  font-size:11px;transition:background .1s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-}}
+.ep-btn{{display:block;width:100%;text-align:left;background:none;border:none;color:var(--text);padding:7px 14px;cursor:pointer;font-family:var(--font);font-size:11px;transition:background .1s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
 .ep-btn:hover{{background:var(--border)}}
 .ep-btn.active{{background:var(--border);color:var(--accent)}}
 .badge{{display:inline-block;font-size:8px;padding:1px 4px;border-radius:3px;margin-right:5px;font-weight:700;vertical-align:middle}}
@@ -460,63 +294,32 @@ body{{background:var(--bg);color:var(--text);font-family:var(--font);font-size:1
 .badge-sim{{background:#f59e0b18;color:var(--sim)}}
 .badge-cfg{{background:#a78bfa18;color:var(--cfg)}}
 .badge-goby{{background:#3b82f618;color:var(--accent2)}}
-.health{{
-  padding:8px 14px;border-top:1px solid var(--border);font-size:10px;
-  color:var(--muted);display:flex;align-items:center;gap:6px;
-}}
+.health{{padding:8px 14px;border-top:1px solid var(--border);font-size:10px;color:var(--muted);display:flex;align-items:center;gap:6px}}
 .dot{{width:7px;height:7px;border-radius:50%;background:var(--accent);flex-shrink:0}}
 .dot.off{{background:var(--red)}}
-
-/* Main */
 .main{{flex:1;display:flex;flex-direction:column;overflow:hidden}}
-.topbar{{
-  padding:10px 16px;border-bottom:1px solid var(--border);display:flex;
-  align-items:center;gap:8px;background:var(--surface);flex-wrap:wrap;min-height:42px;
-}}
+.topbar{{padding:10px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;background:var(--surface);flex-wrap:wrap;min-height:42px}}
 .topbar .method{{color:var(--accent);font-weight:700;font-size:11px}}
 .topbar .path{{color:var(--text);font-size:12px}}
 .topbar .desc{{color:var(--muted);font-size:10px;margin-left:auto}}
 .content{{flex:1;display:flex;overflow:hidden}}
 .editor-pane,.result-pane{{flex:1;display:flex;flex-direction:column;overflow:hidden}}
 .editor-pane{{border-right:1px solid var(--border)}}
-.pane-header{{
-  padding:6px 12px;font-size:9px;text-transform:uppercase;letter-spacing:1px;
-  color:var(--muted);border-bottom:1px solid var(--border);background:var(--surface);
-  display:flex;align-items:center;justify-content:space-between;gap:6px;flex-shrink:0;
-}}
-textarea{{
-  flex:1;background:var(--bg);color:var(--text);border:none;padding:10px 12px;
-  font-family:var(--font);font-size:12px;resize:none;outline:none;width:100%;min-height:60px;
-}}
-pre{{
-  flex:1;background:var(--bg);color:var(--text);padding:10px 12px;overflow:auto;
-  font-family:var(--font);font-size:11px;white-space:pre-wrap;word-break:break-all;
-}}
-.send-btn{{
-  background:var(--accent);color:#000;border:none;padding:6px 16px;border-radius:4px;
-  cursor:pointer;font-family:var(--font);font-size:11px;font-weight:700;
-}}
+.pane-header{{padding:6px 12px;font-size:9px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);border-bottom:1px solid var(--border);background:var(--surface);display:flex;align-items:center;justify-content:space-between;gap:6px;flex-shrink:0}}
+textarea{{flex:1;background:var(--bg);color:var(--text);border:none;padding:10px 12px;font-family:var(--font);font-size:12px;resize:none;outline:none;width:100%;min-height:60px}}
+pre{{flex:1;background:var(--bg);color:var(--text);padding:10px 12px;overflow:auto;font-family:var(--font);font-size:11px;white-space:pre-wrap;word-break:break-all}}
+.send-btn{{background:var(--accent);color:#000;border:none;padding:6px 16px;border-radius:4px;cursor:pointer;font-family:var(--font);font-size:11px;font-weight:700}}
 .send-btn:hover{{opacity:.85}}
 .send-btn:disabled{{opacity:.5;cursor:wait}}
 .status{{font-size:10px;padding:0 6px}}
 .status.ok{{color:var(--accent)}}
 .status.err{{color:var(--red)}}
-
-/* Mobile hamburger */
-.menu-toggle{{
-  display:none;background:none;border:none;color:var(--text);font-size:20px;
-  cursor:pointer;padding:10px 14px;position:fixed;top:0;left:0;z-index:101;
-}}
+.menu-toggle{{display:none;background:none;border:none;color:var(--text);font-size:20px;cursor:pointer;padding:10px 14px;position:fixed;top:0;left:0;z-index:101}}
 .overlay{{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99}}
 .overlay.open{{display:block}}
-
-/* Responsive */
 @media(max-width:768px){{
   .menu-toggle{{display:block}}
-  .sidebar{{
-    position:fixed;top:0;left:-100%;width:80vw;min-width:auto;height:100vh;
-    z-index:100;transition:left .2s ease;padding-top:44px;
-  }}
+  .sidebar{{position:fixed;top:0;left:-100%;width:80vw;min-width:auto;height:100vh;z-index:100;transition:left .2s ease;padding-top:44px}}
   .sidebar.open{{left:0}}
   .topbar{{padding:10px 10px 10px 44px}}
   .topbar .desc{{display:none}}
@@ -535,7 +338,7 @@ pre{{
   <button class="menu-toggle" id="menuBtn" onclick="toggleMenu()">&#9776;</button>
   <div class="overlay" id="overlay" onclick="toggleMenu()"></div>
   <div class="sidebar" id="sidebar">
-    <div class="sidebar-head"><h1>Chia Simulator <span>API</span></h1></div>
+    <div class="sidebar-head"><h1>Chia Simulator <span>+ Goby</span></h1></div>
     <div class="nav-scroll" id="nav"></div>
     <div class="health"><div class="dot" id="healthDot"></div><span id="healthText">connecting...</span></div>
   </div>
@@ -566,8 +369,8 @@ pre{{
 <script>
 const G={groups_json};
 let cur='get_blockchain_state';
-const simEps=['farm_block','set_auto_farming','get_auto_farming','revert_blocks','get_all_puzzle_hashes','fund_wallet'];
-const cfgEps=['get_config','set_config','logs'];
+const simEps=['farm_block','revert_blocks','get_all_puzzle_hashes','fund_wallet'];
+const cfgEps=['get_config','set_config'];
 const gobyEps=['v1/chia_rpc','v1/utxos','v1/balance','v1/sendtx','v1/fee_estimate','v1/assets'];
 const getEps=['logs/node','logs/api','v1/utxos','v1/balance','v1/assets'];
 
@@ -587,71 +390,51 @@ function buildNav(){{
   }}
   nav.innerHTML=html;
 }}
-
-function toggleMenu(){{
-  document.getElementById('sidebar').classList.toggle('open');
-  document.getElementById('overlay').classList.toggle('open');
-}}
-
+function toggleMenu(){{document.getElementById('sidebar').classList.toggle('open');document.getElementById('overlay').classList.toggle('open')}}
 function sel(btn){{
   document.querySelectorAll('.ep-btn').forEach(b=>b.classList.remove('active'));
-  btn.classList.add('active');
-  cur=btn.dataset.ep;
+  btn.classList.add('active');cur=btn.dataset.ep;
   document.getElementById('epPath').textContent='/'+cur;
   document.getElementById('epDesc').textContent=btn.dataset.desc;
   document.querySelector('.topbar .method').textContent=getEps.includes(cur)?'GET':'POST';
   try{{document.getElementById('reqBody').value=JSON.stringify(JSON.parse(btn.dataset.body),null,2)}}
   catch{{document.getElementById('reqBody').value=btn.dataset.body}}
-  document.getElementById('resBody').textContent='';
-  document.getElementById('status').textContent='';
-  document.getElementById('timing').textContent='';
+  document.getElementById('resBody').textContent='';document.getElementById('status').textContent='';document.getElementById('timing').textContent='';
   if(window.innerWidth<=768)toggleMenu();
 }}
-
 async function send(){{
   const btn=document.getElementById('sendBtn'),st=document.getElementById('status'),tm=document.getElementById('timing');
-  btn.disabled=true;st.textContent='';
-  const t0=performance.now();
+  btn.disabled=true;st.textContent='';const t0=performance.now();
   try{{
-    const body=document.getElementById('reqBody').value.trim();
-    let r;
-    if(getEps.includes(cur)){{
-      let qs='';
-      try{{const p=JSON.parse(body||'{{}}');qs='?'+new URLSearchParams(p).toString()}}catch{{}}
-      r=await fetch('/'+cur+qs);
-    }}else{{
-      r=await fetch('/'+cur,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:body||'{{}}'}});
-    }}
-    const d=await r.json();
-    const ms=Math.round(performance.now()-t0);
-    tm.textContent=ms+'ms';
-    document.getElementById('resBody').textContent=JSON.stringify(d,null,2);
-    st.className='status '+(d.success?'ok':'err');
-    st.textContent=d.success?'OK':'ERR';
-  }}catch(e){{
-    document.getElementById('resBody').textContent=e.toString();
-    st.className='status err';st.textContent='ERR';
-    tm.textContent=Math.round(performance.now()-t0)+'ms';
-  }}
+    const body=document.getElementById('reqBody').value.trim();let r;
+    if(getEps.includes(cur)){{let qs='';try{{const p=JSON.parse(body||'{{}}');qs='?'+new URLSearchParams(p).toString()}}catch{{}}r=await fetch('/'+cur+qs)}}
+    else{{r=await fetch('/'+cur,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:body||'{{}}'}})}}
+    const d=await r.json();const ms=Math.round(performance.now()-t0);
+    tm.textContent=ms+'ms';document.getElementById('resBody').textContent=JSON.stringify(d,null,2);
+    st.className='status '+(d.success!==false?'ok':'err');st.textContent=d.success!==false?'OK':'ERR';
+  }}catch(e){{document.getElementById('resBody').textContent=e.toString();st.className='status err';st.textContent='ERR';tm.textContent=Math.round(performance.now()-t0)+'ms'}}
   btn.disabled=false;
 }}
-
 async function checkHealth(){{
-  try{{
-    const r=await fetch('/healthz');const d=await r.json();
-    document.getElementById('healthDot').className='dot'+(d.success?'':' off');
-    document.getElementById('healthText').textContent=d.success?'Height: '+d.height:'offline';
-  }}catch{{
-    document.getElementById('healthDot').className='dot off';
-    document.getElementById('healthText').textContent='offline';
-  }}
+  try{{const r=await fetch('/healthz');const d=await r.json();document.getElementById('healthDot').className='dot'+(d.success?'':' off');document.getElementById('healthText').textContent=d.success?'Height: '+d.height:'offline'}}
+  catch{{document.getElementById('healthDot').className='dot off';document.getElementById('healthText').textContent='offline'}}
 }}
-
-document.getElementById('reqBody').addEventListener('keydown',e=>{{
-  if((e.metaKey||e.ctrlKey)&&e.key==='Enter')send();
-}});
-
+document.getElementById('reqBody').addEventListener('keydown',e=>{{if((e.metaKey||e.ctrlKey)&&e.key==='Enter')send()}});
 buildNav();checkHealth();setInterval(checkHealth,5000);
 </script>
 </body>
 </html>"""
+
+
+# --- Coinset-compatible catch-all (MUST be last) ---
+# Routes all POST /<rpc_method> to the Chia RPC via Goby's client
+from openapi.api import get_chain, RPC_METHOD_WHITE_LIST as _WL
+from fastapi import Depends, HTTPException
+
+
+@app.api_route("/{rpc_method}", methods=["POST"])
+async def coinset_compat_rpc(rpc_method: str, request: Request, chain=Depends(get_chain)):
+    if rpc_method not in _WL and rpc_method not in SIM_ONLY_ENDPOINTS:
+        raise HTTPException(400, f"unsupported rpc method: {rpc_method}")
+    body = await request.json() if await request.body() else {}
+    return await chain.client.raw_fetch(rpc_method, body)
