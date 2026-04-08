@@ -87,7 +87,13 @@ ENDPOINT_GROUPS = {
         {"name": "get_blockchain_state", "body": "{}", "desc": "Current blockchain state"},
         {"name": "get_network_info", "body": "{}", "desc": "Network name and prefix"},
         {"name": "get_block_record_by_height", "body": '{"height": 1}', "desc": "Block record at height"},
+        {"name": "get_block_record", "body": '{"header_hash": "0x..."}', "desc": "Block record by header hash"},
+        {"name": "get_block_records", "body": '{"start": 0, "end": 5}', "desc": "Block records in range"},
+        {"name": "get_block", "body": '{"header_hash": "0x..."}', "desc": "Full block by header hash"},
+        {"name": "get_blocks", "body": '{"start": 0, "end": 5}', "desc": "Full blocks in range"},
+        {"name": "get_block_spends", "body": '{"header_hash": "0x..."}', "desc": "Spends in a block"},
         {"name": "get_additions_and_removals", "body": '{"header_hash": "0x..."}', "desc": "Coins added/removed in block"},
+        {"name": "get_routes", "body": "{}", "desc": "List all available RPC routes"},
         {"name": "get_fee_estimate", "body": '{"target_times": [60, 120, 300], "spend_type": "send_xch_transaction"}', "desc": "Fee estimates"},
     ],
     "Coins": [
@@ -101,6 +107,9 @@ ENDPOINT_GROUPS = {
     ],
     "Mempool": [
         {"name": "get_mempool_item_by_tx_id", "body": '{"tx_id": "0x..."}', "desc": "Mempool item by tx ID"},
+        {"name": "get_mempool_items_by_coin_name", "body": '{"coin_name": "0x..."}', "desc": "Mempool items by coin"},
+        {"name": "get_all_mempool_tx_ids", "body": "{}", "desc": "All mempool transaction IDs"},
+        {"name": "get_all_mempool_items", "body": "{}", "desc": "All mempool items"},
         {"name": "push_tx", "body": '{"spend_bundle": {}}', "desc": "Submit spend bundle"},
     ],
     "Simulator": [
