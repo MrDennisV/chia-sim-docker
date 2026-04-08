@@ -1,0 +1,19 @@
+version: "3.8"
+
+services:
+  chia-sim:
+    build: .
+    container_name: chia-sim
+    ports:
+      - "3000:3000"      # coinset API
+      - "18555:8555"     # fullnode RPC (18555 en host porque 8555 ya está en uso)
+    environment:
+      PLOT_COUNT: "1"
+      AUTO_FARM: "true"
+      BLOCK_INTERVAL: "10"
+    volumes:
+      - chia-sim-data:/root/.chia
+    restart: unless-stopped
+
+volumes:
+  chia-sim-data:
