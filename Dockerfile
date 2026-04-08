@@ -30,13 +30,17 @@ RUN CHIA_ROOT=/tmp/chia-temp chia init >/dev/null 2>&1 \
     && echo "1" | chia dev sim create -a true \
     && rm -rf /tmp/chia-temp
 
-# Patch config: fixed RPC port + fixed daemon port (sim generates random ones)
+# Patch config: fixed ports + testnet11 genesis challenge (for Goby signature compat)
 RUN python3 -c "\
 import yaml; \
 p='${CHIA_ROOT}/config/config.yaml'; \
 c=yaml.safe_load(open(p)); \
 c['full_node']['rpc_port']=8555; \
 c['daemon_port']=55400; \
+t11_genesis='37a90eb5185a9c4439a91ddc98bbadce7b4feba060d50116a067de66bf236615'; \
+sim=c['network_overrides']['constants']['simulator0']; \
+sim['GENESIS_CHALLENGE']=t11_genesis; \
+sim['AGG_SIG_ME_ADDITIONAL_DATA']=t11_genesis; \
 yaml.dump(c,open(p,'w'))"
 
 # Remove DB so it rebuilds cleanly on first start (keeps config, plots, keys)
