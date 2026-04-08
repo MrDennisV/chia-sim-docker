@@ -95,6 +95,7 @@ ENDPOINT_GROUPS = {
     "Config": [
         {"name": "get_config", "body": "{}", "desc": "Get simulator config"},
         {"name": "set_config", "body": '{"block_interval": 10, "auto_farm": true}', "desc": "Update simulator config"},
+        {"name": "logs", "body": '{"lines": 50, "level": ""}', "desc": "View logs (level: INFO, WARNING, ERROR)"},
     ],
 }
 
@@ -173,6 +174,31 @@ async def set_config(request: Request):
     _write_runtime(cfg)
     cfg["success"] = True
     return cfg
+
+
+# --- logs ---
+
+
+@app.get("/logs")
+async def logs(lines: int = 50, level: str = ""):
+    log_path = f"{CHIA_ROOT}/log/debug.log"
+    try:
+        with open(log_path, "rb") as f:
+            # Read from end of file efficiently
+            f.seek(0, 2)
+            size = f.tell()
+            chunk = min(size, lines * 300)
+            f.seek(max(0, size - chunk))
+            raw = f.read().decode("utf-8", errors="replace").splitlines()
+        tail = raw[-lines:]
+        if level:
+            level_upper = level.upper()
+            tail = [l for l in tail if level_upper in l]
+        return {"success": True, "lines": tail, "count": len(tail)}
+    except FileNotFoundError:
+        return JSONResponse({"success": False, "error": "Log file not found"}, 404)
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, 500)
 
 
 # --- healthz ---
@@ -339,7 +365,8 @@ pre{{
 const G={groups_json};
 let cur='get_blockchain_state';
 const simEps=['farm_block','set_auto_farming','get_auto_farming','revert_blocks','get_all_puzzle_hashes','fund_wallet'];
-const cfgEps=['get_config','set_config'];
+const cfgEps=['get_config','set_config','logs'];
+const getEps=['logs'];
 
 function buildNav(){{
   const nav=document.getElementById('nav');
@@ -348,8 +375,9 @@ function buildNav(){{
     html+='<div class="group-title">'+group+'</div>';
     for(const ep of eps){{
       const isSim=simEps.includes(ep.name),isCfg=cfgEps.includes(ep.name);
+      const isGet=getEps.includes(ep.name);
       const bc=isCfg?'badge-cfg':isSim?'badge-sim':'badge-post';
-      const bl=isCfg?'CFG':isSim?'SIM':'POST';
+      const bl=isGet?'GET':isCfg?'CFG':isSim?'SIM':'POST';
       const esc=ep.body.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
       html+='<button class="ep-btn'+(ep.name===cur?' active':'')+'" data-ep="'+ep.name+'" data-body="'+esc+'" data-desc="'+ep.desc+'" onclick="sel(this)"><span class="badge '+bc+'">'+bl+'</span>'+ep.name+'</button>';
     }}
@@ -368,6 +396,7 @@ function sel(btn){{
   cur=btn.dataset.ep;
   document.getElementById('epPath').textContent='/'+cur;
   document.getElementById('epDesc').textContent=btn.dataset.desc;
+  document.querySelector('.topbar .method').textContent=getEps.includes(cur)?'GET':'POST';
   try{{document.getElementById('reqBody').value=JSON.stringify(JSON.parse(btn.dataset.body),null,2)}}
   catch{{document.getElementById('reqBody').value=btn.dataset.body}}
   document.getElementById('resBody').textContent='';
@@ -382,7 +411,14 @@ async function send(){{
   const t0=performance.now();
   try{{
     const body=document.getElementById('reqBody').value.trim();
-    const r=await fetch('/'+cur,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:body||'{{}}'}});
+    let r;
+    if(getEps.includes(cur)){{
+      let qs='';
+      try{{const p=JSON.parse(body||'{{}}');qs='?'+new URLSearchParams(p).toString()}}catch{{}}
+      r=await fetch('/'+cur+qs);
+    }}else{{
+      r=await fetch('/'+cur,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:body||'{{}}'}});
+    }}
     const d=await r.json();
     const ms=Math.round(performance.now()-t0);
     tm.textContent=ms+'ms';
