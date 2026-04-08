@@ -1,6 +1,6 @@
 # Chia Simulator Docker
 
-Local Chia blockchain simulator with a coinset.org-compatible HTTP API. Starts in seconds with pre-baked plots and keys.
+Local Chia blockchain simulator with coinset.org and Goby wallet compatible HTTP API. Starts in seconds with pre-baked plots and keys.
 
 ## Quick Start
 
@@ -13,6 +13,30 @@ curl http://localhost:3000/healthz
 ## Web UI
 
 Open `http://localhost:3000` for an interactive API playground.
+
+## Goby Wallet
+
+Compatible with the [Goby](https://www.goby.app/) Chrome extension. Point Goby to `http://localhost:3000` (or your LAN IP) to:
+
+- View XCH balance
+- Send XCH transactions
+- View UTXOs / coins
+- Estimate fees
+
+### Goby /v1/ Endpoints
+- `POST /v1/chia_rpc` — RPC wrapper `{method, params}`
+- `GET /v1/utxos?address=txch1...` — Unspent coins
+- `GET /v1/balance?address=txch1...` — Total balance
+- `POST /v1/sendtx` — Submit spend bundle
+- `POST /v1/fee_estimate` — Fee estimates
+- `GET /v1/assets?address=txch1...` — NFT/DID assets (empty on simulator)
+
+### Fund a test wallet
+```bash
+curl -X POST http://localhost:3000/fund_wallet \
+  -H "Content-Type: application/json" \
+  -d '{"address": "txch1...", "amount": 100}'
+```
 
 ## Configuration
 
@@ -49,22 +73,28 @@ curl -X POST http://localhost:3000/set_config \
 - `POST /get_coin_records_by_names`
 - `POST /get_puzzle_and_solution`
 - `POST /get_block_record_by_height`
+- `POST /get_block_record`
+- `POST /get_block` / `get_blocks`
+- `POST /get_block_spends`
 - `POST /get_additions_and_removals`
 - `POST /get_mempool_item_by_tx_id`
+- `POST /get_all_mempool_tx_ids`
+- `POST /get_all_mempool_items`
 - `POST /push_tx`
 - `POST /get_fee_estimate`
+- `POST /get_routes`
 
 ### Simulator-only
 - `POST /farm_block` — Farm a block to an address
 - `POST /fund_wallet` — Fund a wallet with N XCH
-- `POST /set_auto_farming` — Toggle auto-farming directly
 - `POST /revert_blocks` — Revert last N blocks
 - `POST /get_all_puzzle_hashes` — All puzzle hashes with balances
 
 ### Config & Monitoring
 - `POST /get_config` — Current simulator configuration
 - `POST /set_config` — Update block interval at runtime
-- `GET /logs?lines=50&level=ERROR` — View simulator logs
+- `GET /logs/node?lines=50&level=ERROR` — Simulator full node logs
+- `GET /logs/api?lines=50` — API request logs
 - `GET /healthz` — Health check with current block height
 
 ## Persistent Data
