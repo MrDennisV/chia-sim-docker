@@ -427,14 +427,19 @@ buildNav();checkHealth();setInterval(checkHealth,5000);
 
 
 # --- Coinset-compatible catch-all (MUST be last) ---
-# Routes all POST /<rpc_method> to the Chia RPC via Goby's client
-from openapi.api import get_chain, RPC_METHOD_WHITE_LIST as _WL
-from fastapi import Depends, HTTPException
+# Routes all POST /<rpc_method> directly to Chia RPC (no chain dependency)
+from openapi.api import RPC_METHOD_WHITE_LIST as _WL
 
 
 @app.api_route("/{rpc_method}", methods=["POST"])
-async def coinset_compat_rpc(rpc_method: str, request: Request, chain=Depends(get_chain)):
+async def coinset_compat_rpc(rpc_method: str, request: Request):
     if rpc_method not in _WL and rpc_method not in SIM_ONLY_ENDPOINTS:
-        raise HTTPException(400, f"unsupported rpc method: {rpc_method}")
-    body = await request.json() if await request.body() else {}
-    return await chain.client.raw_fetch(rpc_method, body)
+        return JSONResponse({"success": False, "error": f"unsupported rpc method: {rpc_method}"}, 400)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    try:
+        return JSONResponse(rpc(rpc_method, body))
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, 500)
