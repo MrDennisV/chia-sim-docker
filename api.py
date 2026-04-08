@@ -1,4 +1,4 @@
-import json, ssl, os
+import json, ssl, os, logging, time
 import urllib.request
 import yaml
 from fastapi import FastAPI, Request
@@ -19,6 +19,25 @@ KEY = f"{CHIA_ROOT}/config/ssl/full_node/private_full_node.key"
 
 app = FastAPI(title="Chia Simulator API", docs_url=None, redoc_url=None)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+# API logger
+_api_logger = logging.getLogger("api")
+_api_logger.setLevel(logging.INFO)
+_api_handler = logging.FileHandler("/tmp/api.log")
+_api_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+_api_logger.addHandler(_api_handler)
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    t0 = time.time()
+    response = await call_next(request)
+    ms = round((time.time() - t0) * 1000)
+    if request.url.path not in ("/healthz", "/logs/api", "/logs/node", "/"):
+        _api_logger.info(f"{request.method} {request.url.path} {response.status_code} {ms}ms")
+    if response.status_code >= 400:
+        _api_logger.warning(f"{request.method} {request.url.path} {response.status_code} {ms}ms")
+    return response
 
 
 def rpc(path: str, body: dict | None = None) -> dict:
@@ -95,7 +114,8 @@ ENDPOINT_GROUPS = {
     "Config": [
         {"name": "get_config", "body": "{}", "desc": "Get simulator config"},
         {"name": "set_config", "body": '{"block_interval": 5}', "desc": "Set block interval (0=auto-farm on tx, >0=periodic seconds)"},
-        {"name": "logs", "body": '{"lines": 50, "level": ""}', "desc": "View logs (level: INFO, WARNING, ERROR)"},
+        {"name": "logs/node", "body": '{"lines": 50, "level": ""}', "desc": "Simulator full node logs"},
+        {"name": "logs/api", "body": '{"lines": 50, "level": ""}', "desc": "API request logs"},
     ],
 }
 
@@ -179,13 +199,12 @@ async def set_config(request: Request):
 
 # --- logs ---
 
+API_LOG = "/tmp/api.log"
 
-@app.get("/logs")
-async def logs(lines: int = 50, level: str = ""):
-    log_path = f"{CHIA_ROOT}/log/debug.log"
+
+def _read_log(path: str, lines: int, level: str) -> dict:
     try:
-        with open(log_path, "rb") as f:
-            # Read from end of file efficiently
+        with open(path, "rb") as f:
             f.seek(0, 2)
             size = f.tell()
             chunk = min(size, lines * 300)
@@ -197,9 +216,19 @@ async def logs(lines: int = 50, level: str = ""):
             tail = [l for l in tail if level_upper in l]
         return {"success": True, "lines": tail, "count": len(tail)}
     except FileNotFoundError:
-        return JSONResponse({"success": False, "error": "Log file not found"}, 404)
+        return {"success": True, "lines": [], "count": 0}
     except Exception as e:
-        return JSONResponse({"success": False, "error": str(e)}, 500)
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/logs/node")
+async def logs_node(lines: int = 50, level: str = ""):
+    return _read_log(f"{CHIA_ROOT}/log/debug.log", lines, level)
+
+
+@app.get("/logs/api")
+async def logs_api(lines: int = 50, level: str = ""):
+    return _read_log(API_LOG, lines, level)
 
 
 # --- healthz ---
@@ -367,7 +396,7 @@ const G={groups_json};
 let cur='get_blockchain_state';
 const simEps=['farm_block','set_auto_farming','get_auto_farming','revert_blocks','get_all_puzzle_hashes','fund_wallet'];
 const cfgEps=['get_config','set_config','logs'];
-const getEps=['logs'];
+const getEps=['logs/node','logs/api'];
 
 function buildNav(){{
   const nav=document.getElementById('nav');
