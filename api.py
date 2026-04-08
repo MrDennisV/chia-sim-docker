@@ -1,4 +1,4 @@
-import json, ssl, os, threading
+import json, ssl, os
 import urllib.request
 import yaml
 from fastapi import FastAPI, Request
@@ -21,7 +21,9 @@ app = FastAPI(title="Chia Simulator API", docs_url=None, redoc_url=None)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
-def rpc(path: str, body: dict = {}) -> dict:
+def rpc(path: str, body: dict | None = None) -> dict:
+    if body is None:
+        body = {}
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
@@ -117,7 +119,12 @@ async def fund_wallet(request: Request):
     address = body.get("address")
     if not address:
         return JSONResponse({"success": False, "error": "address is required"}, 400)
-    amount_xch = float(body.get("amount", 2.0))
+    try:
+        amount_xch = float(body.get("amount", 2.0))
+    except (TypeError, ValueError):
+        return JSONResponse({"success": False, "error": "amount must be a number"}, 400)
+    if amount_xch <= 0:
+        return JSONResponse({"success": False, "error": "amount must be positive"}, 400)
     target_mojos = int(amount_xch * MOJO_PER_XCH)
     blocks_needed = max(1, -(-target_mojos // REWARD_PER_BLOCK))
     farmed = []
@@ -175,7 +182,9 @@ async def set_config(request: Request):
 async def health():
     try:
         d = rpc("get_blockchain_state")
-        return {"success": True, "height": d["blockchain_state"]["peak"]["height"]}
+        peak = d["blockchain_state"].get("peak")
+        height = peak["height"] if peak else 0
+        return {"success": True, "height": height, "synced": d["blockchain_state"]["sync"]["synced"]}
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e)}, 503)
 
