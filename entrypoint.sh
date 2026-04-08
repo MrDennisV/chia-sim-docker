@@ -1,8 +1,7 @@
 #!/bin/bash
 set -e
 
-AUTO_FARM=${AUTO_FARM:-true}
-BLOCK_INTERVAL=${BLOCK_INTERVAL:-0}
+BLOCK_INTERVAL=${BLOCK_INTERVAL:-5}
 
 # Clean stale state from previous runs
 chia stop all -d 2>/dev/null || true
@@ -12,7 +11,7 @@ sleep 1
 
 # Write runtime config for API
 cat > /tmp/sim_runtime.json <<EOJSON
-{"block_interval": $BLOCK_INTERVAL, "auto_farm": $AUTO_FARM}
+{"block_interval": $BLOCK_INTERVAL}
 EOJSON
 
 # Start simulator
@@ -34,11 +33,13 @@ for i in $(seq 1 60); do
     sleep 2
 done
 
-# Configure auto-farm
-if [ "$AUTO_FARM" = "true" ]; then
+# Auto-farm logic: interval=0 means auto-farm on push_tx, interval>0 means periodic
+if [ "$BLOCK_INTERVAL" -eq 0 ] 2>/dev/null; then
     chia rpc full_node set_auto_farming '{"auto_farm": true}' 2>/dev/null || true
+    echo "Mode: auto-farm (instant confirmation on push_tx)"
 else
     chia rpc full_node set_auto_farming '{"auto_farm": false}' 2>/dev/null || true
+    echo "Mode: periodic farm every ${BLOCK_INTERVAL}s (tx stays in mempool)"
 fi
 
 # Determine farm address: env override or from config
@@ -69,10 +70,8 @@ fi
 uvicorn api:app --host 0.0.0.0 --port 3000 --app-dir / &
 
 echo "=== Chia Simulator ready ==="
-echo "    API:          http://localhost:3000"
-echo "    RPC:          https://localhost:8555"
-echo "    Auto-farm:    $AUTO_FARM"
-echo "    Block interval: ${BLOCK_INTERVAL}s"
-echo "    Farm address: $FARM_ADDR"
+echo "    API:            http://localhost:3000"
+echo "    Block interval: ${BLOCK_INTERVAL}s (0=auto-farm)"
+echo "    Farm address:   $FARM_ADDR"
 
 tail -f "$CHIA_ROOT/log/debug.log"

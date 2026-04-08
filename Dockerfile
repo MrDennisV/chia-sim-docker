@@ -54,8 +54,7 @@ COPY --from=builder /root/.chia_keys /root/.chia_keys
 
 ENV PATH="/chia/venv/bin:$PATH"
 ENV CHIA_ROOT="/root/.chia/simulator/main"
-ENV AUTO_FARM="true"
-ENV BLOCK_INTERVAL="0"
+ENV BLOCK_INTERVAL="5"
 ENV FARM_ADDRESS=""
 
 COPY api.py /api.py

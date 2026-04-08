@@ -41,7 +41,7 @@ def _read_runtime():
         with open(RUNTIME_CONFIG) as f:
             return json.load(f)
     except Exception:
-        return {"block_interval": 10, "auto_farm": True}
+        return {"block_interval": 5}
 
 
 def _write_runtime(cfg):
@@ -87,14 +87,14 @@ ENDPOINT_GROUPS = {
     "Simulator": [
         {"name": "farm_block", "body": '{"address": "txch1...", "guarantee_tx_block": true}', "desc": "Farm a block"},
         {"name": "fund_wallet", "body": '{"address": "txch1...", "amount": 10.0}', "desc": "Fund wallet with XCH"},
-        {"name": "set_auto_farming", "body": '{"auto_farm": true}', "desc": "Toggle auto-farming"},
+        {"name": "set_auto_farming", "body": '{"auto_farm": true}', "desc": "Toggle auto-farming (use set_config instead)"},
         {"name": "get_auto_farming", "body": "{}", "desc": "Auto-farming status"},
         {"name": "revert_blocks", "body": '{"num_of_blocks": 1}', "desc": "Revert last N blocks"},
         {"name": "get_all_puzzle_hashes", "body": "{}", "desc": "All puzzle hashes with balances"},
     ],
     "Config": [
         {"name": "get_config", "body": "{}", "desc": "Get simulator config"},
-        {"name": "set_config", "body": '{"block_interval": 10, "auto_farm": true}', "desc": "Update simulator config"},
+        {"name": "set_config", "body": '{"block_interval": 5}', "desc": "Set block interval (0=auto-farm on tx, >0=periodic seconds)"},
         {"name": "logs", "body": '{"lines": 50, "level": ""}', "desc": "View logs (level: INFO, WARNING, ERROR)"},
     ],
 }
@@ -148,6 +148,7 @@ async def fund_wallet(request: Request):
 @app.post("/get_config")
 async def get_config(request: Request):
     cfg = _read_runtime()
+    cfg["auto_farm"] = cfg["block_interval"] == 0
     cfg["farm_address"] = FARM_ADDR
     cfg["rpc_port"] = RPC_PORT
     cfg["network"] = "simulator0"
@@ -165,13 +166,13 @@ async def set_config(request: Request):
     cfg = _read_runtime()
     if "block_interval" in body:
         cfg["block_interval"] = max(0, int(body["block_interval"]))
-    if "auto_farm" in body:
-        cfg["auto_farm"] = bool(body["auto_farm"])
+        # interval=0 means auto-farm on push_tx, >0 means periodic
         try:
-            rpc("set_auto_farming", {"auto_farm": cfg["auto_farm"]})
+            rpc("set_auto_farming", {"auto_farm": cfg["block_interval"] == 0})
         except Exception:
             pass
     _write_runtime(cfg)
+    cfg["auto_farm"] = cfg["block_interval"] == 0
     cfg["success"] = True
     return cfg
 

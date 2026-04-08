@@ -5,8 +5,7 @@ services:
     ports:
       - "3000:3000"    # Coinset-compatible API + Web UI
     environment:
-      AUTO_FARM: "true"          # Auto-farm on new transactions
-      BLOCK_INTERVAL: "0"       # Seconds between periodic farms (0 = disabled)
+      BLOCK_INTERVAL: "5"       # Seconds between blocks (0 = instant on push_tx)
       FARM_ADDRESS: ""           # Override farming reward address (blank = use default)
     # Uncomment for persistent blockchain data across restarts:
     # volumes:
