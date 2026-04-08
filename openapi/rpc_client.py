@@ -1,0 +1,205 @@
+import asyncio
+import ssl
+from pathlib import Path
+from ssl import SSLContext
+from typing import Any, List, Optional
+from urllib.parse import urljoin
+
+import aiohttp
+import yaml
+
+from .utils.singleflight import SingleFlight
+
+bytes32 = bytes
+
+
+def ssl_context_for_client(
+    ca_cert: Path,
+    ca_key: Path,
+    private_cert_path: Path,
+    private_key_path: Path,
+
+):
+
+    ssl_context = ssl._create_unverified_context(purpose=ssl.Purpose.SERVER_AUTH, cafile=str(ca_cert))
+    ssl_context.check_hostname = False
+    ssl_context.load_cert_chain(certfile=str(private_cert_path), keyfile=str(private_key_path))
+    ssl_context.verify_mode = ssl.CERT_REQUIRED
+    return ssl_context
+
+
+class FullNodeRpcClient:
+    url: str
+    session: aiohttp.ClientSession
+    closing_task: Optional[asyncio.Task]
+    ssl_context: Optional[SSLContext]
+
+    def __init__(self):
+        self.sf = SingleFlight()
+
+    @classmethod
+    async def create_by_chia_root_path(cls, chia_root_path):
+        self = cls()
+        root_path = Path(chia_root_path)
+        config_path = Path(chia_root_path) / "config" / "config.yaml"
+        config = yaml.safe_load(config_path.open("r", encoding="utf-8"))
+        self.url = f"https://{config['self_hostname']}:{config['full_node']['rpc_port']}"
+        ca_cert_path = root_path / config["private_ssl_ca"]["crt"]
+        ca_key_path = root_path / config["private_ssl_ca"]["key"]
+        private_cert_path = root_path / config["daemon_ssl"]["private_crt"]
+        private_key_path = root_path / config["daemon_ssl"]["private_key"]
+        self.session = aiohttp.ClientSession()
+        self.ssl_context = ssl_context_for_client(ca_cert_path, ca_key_path, private_cert_path, private_key_path)
+        self.closing_task = None
+        return self
+
+    @classmethod
+    async def create_by_proxy_url(cls, proxy_url):
+        self = cls()
+        self.url = proxy_url
+        self.session = aiohttp.ClientSession()
+        self.ssl_context = None
+        self.closing_task = None
+        return self
+
+    async def raw_fetch(self, path, request_json):
+        if request_json is None:
+            request_json = {}
+        async with self.session.post(
+            urljoin(self.url, path), json=request_json, ssl_context=self.ssl_context
+        ) as response:
+            res_json = await response.json()
+            return res_json
+
+    async def fetch(self, path, request_json) -> Any:
+        async with self.session.post(
+            urljoin(self.url, path), json=request_json, ssl_context=self.ssl_context
+        ) as response:
+            response.raise_for_status()
+            res_json = await response.json()
+            if not res_json["success"]:
+                raise ValueError(res_json)
+            return res_json
+
+    def close(self):
+        self.closing_task = asyncio.create_task(self.session.close())
+
+    async def await_closed(self):
+        if self.closing_task is not None:
+            await self.closing_task
+
+    async def get_network_info(self):
+        return await self.fetch("get_network_info", {})
+
+    async def get_blockchain_state(self):
+        resp = await self.fetch("get_blockchain_state", {})
+        return resp['blockchain_state']
+
+    async def get_block_number(self):
+        resp = await self.sf.do('block_number', lambda: self.get_blockchain_state())
+        return resp['peak']['height']
+
+    async def get_coin_records_by_puzzle_hash(
+        self,
+        puzzle_hash: bytes32,
+        include_spent_coins: bool = True,
+        start_height: Optional[int] = None,
+        end_height: Optional[int] = None,
+    ) -> List:
+        d = {"puzzle_hash": puzzle_hash.hex(), "include_spent_coins": include_spent_coins}
+        if start_height is not None:
+            d["start_height"] = start_height
+        if end_height is not None:
+            d["end_height"] = end_height
+
+        response = await self.fetch("get_coin_records_by_puzzle_hash", d)
+        return response['coin_records']
+
+    async def get_coin_records_by_puzzle_hashes(
+        self,
+        puzzle_hashes: List[bytes32],
+        include_spent_coins: bool = True,
+        start_height: Optional[int] = None,
+        end_height: Optional[int] = None,
+    ) -> List:
+        puzzle_hashes_hex = [ph.hex() for ph in puzzle_hashes]
+        d = {"puzzle_hashes": puzzle_hashes_hex, "include_spent_coins": include_spent_coins}
+        if start_height is not None:
+            d["start_height"] = start_height
+        if end_height is not None:
+            d["end_height"] = end_height
+
+        response = await self.fetch("get_coin_records_by_puzzle_hashes", d)
+        return response["coin_records"]
+
+    async def push_tx(self, spend_bundle: dict):
+        return await self.fetch("push_tx", {"spend_bundle": spend_bundle})
+
+    async def get_coin_records_by_hint(
+        self,
+        hint: bytes32,
+        include_spent_coins: bool = True,
+        start_height: Optional[int] = None,
+        end_height: Optional[int] = None,
+    ):
+        request = {
+            'hint': hint.hex(),
+            'include_spent_coins': include_spent_coins,
+        }
+        if start_height:
+            request['start_height'] = start_height
+        if end_height:
+            request['end_height'] = end_height
+        response = await self.fetch("get_coin_records_by_hint", request)
+        return response["coin_records"]
+
+    async def get_coin_records_by_names(
+        self,
+        names: List[bytes32],
+        include_spent_coins: bool = True,
+        start_height: Optional[int] = None,
+        end_height: Optional[int] = None,
+    ) -> List:
+        names_hex = [name.hex() for name in names]
+        d = {"names": names_hex, "include_spent_coins": include_spent_coins}
+        if start_height is not None:
+            d["start_height"] = start_height
+        if end_height is not None:
+            d["end_height"] = end_height
+
+        response = await self.fetch("get_coin_records_by_names", d)
+        return response["coin_records"]
+
+
+    async def get_coin_record_by_name(self, name: bytes32):
+        response = await self.fetch("get_coin_record_by_name", {"name": name.hex()})
+        return response['coin_record']
+
+
+    async def get_puzzle_and_solution(self, coin_id: bytes32, height: int):
+        response = await self.fetch("get_puzzle_and_solution", {"coin_id": coin_id.hex(), "height": height})
+        return response['coin_solution']
+
+    async def get_coin_records_by_parent_ids(self, parent_ids: List[bytes32], include_spent_coins: bool = True,
+        start_height: Optional[int] = None,
+        end_height: Optional[int] = None):
+        parent_ids_hex = [pid.hex() for pid in parent_ids]
+        d = {"parent_ids": parent_ids_hex, "include_spent_coins": include_spent_coins}
+        if start_height is not None:
+            d["start_height"] = start_height
+        if end_height is not None:
+            d["end_height"] = end_height
+        response = await self.fetch("get_coin_records_by_parent_ids", d)
+        return response['coin_records']
+
+    async def get_block_record_by_height(self, height: int):
+        response = await self.fetch("get_block_record_by_height", {"height": height})
+        return response['block_record']
+
+    async def get_additions_and_removals(self, header_hash: bytes32):
+        response = await self.fetch("get_additions_and_removals", {"header_hash": header_hash.hex()})
+        return response['additions'], response['removals']
+
+    async def get_fee_estimate(self, target_times: Optional[List[int]], cost: Optional[int]):
+        response = await self.fetch("get_fee_estimate", {"target_times": target_times, "cost": cost})
+        return response

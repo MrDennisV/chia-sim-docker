@@ -66,8 +66,13 @@ fi
     done
 ) &
 
-# Start coinset API
-uvicorn api:app --host 0.0.0.0 --port 3000 --app-dir / &
+# Start Goby watcher (syncs NFTs/DIDs in background)
+cd /app
+python3 -m openapi.watcher &
+echo "Goby watcher started."
+
+# Start API (Goby + Simulator combined)
+uvicorn api:app --host 0.0.0.0 --port 3000 &
 
 echo "=== Chia Simulator ready ==="
 echo "    API:            http://localhost:3000"

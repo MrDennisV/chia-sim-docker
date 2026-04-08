@@ -12,7 +12,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /chia
 RUN git clone --depth 1 --branch latest https://github.com/Chia-Network/chia-blockchain.git .
 RUN /bin/bash install.sh
-RUN /chia/venv/bin/pip install --no-cache-dir fastapi uvicorn
+
+# Install API deps: FastAPI + Goby backend deps
+RUN /chia/venv/bin/pip install --no-cache-dir \
+    fastapi uvicorn[standard] \
+    aiohttp aiocache aiosqlite \
+    SQLAlchemy[asyncio] \
+    clvm clvm-tools \
+    dynaconf logzero ujson
 
 ENV PATH="/chia/venv/bin:$PATH"
 ENV CHIA_ROOT="/root/.chia/simulator/main"
@@ -57,17 +64,21 @@ ENV CHIA_ROOT="/root/.chia/simulator/main"
 ENV BLOCK_INTERVAL="5"
 ENV FARM_ADDRESS=""
 
-COPY api.py /api.py
+WORKDIR /app
+COPY openapi/ /app/openapi/
+COPY settings.toml /app/settings.toml
+COPY api.py /app/api.py
 COPY entrypoint.sh /entrypoint.sh
 RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
+RUN mkdir -p /app/data /app/logs
 
-EXPOSE 3000 8555
+EXPOSE 3000
 
 HEALTHCHECK --interval=5s --timeout=3s --start-period=30s --retries=10 \
   CMD curl -sf http://localhost:3000/healthz || exit 1
 
-LABEL org.opencontainers.image.source="https://github.com/chia-sim-docker" \
-      org.opencontainers.image.description="Chia blockchain simulator with coinset.org-compatible API" \
+LABEL org.opencontainers.image.source="https://github.com/MrDennisV/chia-sim-docker" \
+      org.opencontainers.image.description="Chia blockchain simulator with Goby wallet + coinset.org compatible API" \
       org.opencontainers.image.title="chia-sim"
 
 CMD ["/entrypoint.sh"]
