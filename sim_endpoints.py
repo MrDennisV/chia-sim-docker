@@ -52,7 +52,10 @@ def rpc(path: str, body: dict | None = None) -> dict:
         f"{RPC_URL}/{path}", data=data, headers={"Content-Type": "application/json"}
     )
     with urllib.request.urlopen(req, context=ctx, timeout=10) as r:
-        return json.loads(r.read())
+        resp = json.loads(r.read())
+    if path == "get_network_info" and resp.get("network_name") == "simulator0":
+        resp["network_name"] = "testnet11"
+    return resp
 
 
 def _read_runtime():
@@ -191,7 +194,7 @@ async def get_config(request: Request):
     cfg["auto_farm"] = cfg["block_interval"] == 0
     cfg["farm_address"] = FARM_ADDR
     cfg["rpc_port"] = RPC_PORT
-    cfg["network"] = "simulator0"
+    cfg["network"] = "testnet11"
     cfg["prefix"] = "txch"
     cfg["success"] = True
     return cfg

@@ -122,7 +122,7 @@ volumes:
 
 ## Network
 
-- Network: `simulator0`
+- Network: **testnet11** — the simulator is configured to identify as testnet11 (genesis challenge, signatures, network name) for compatibility with wallets that only support mainnet and testnet11 as network options
 - Address prefix: `txch`
 - Same RPC API as Chia mainnet fullnode
 - Port 3000: HTTP API + Web UI

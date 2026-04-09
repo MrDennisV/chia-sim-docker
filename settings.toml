@@ -40,7 +40,7 @@ cache="aiocache.SimpleMemoryCache"
 [SUPPORTED_CHAINS]
 [SUPPORTED_CHAINS.simulator]
 id = 2
-network_name = "simulator0"
+network_name = "testnet11"
 network_prefix = "txch"
 rpc_url_or_chia_path = "/root/.chia/simulator/main"
 database_uri = "sqlite+aiosqlite:///data/wallet_simulator.db"
