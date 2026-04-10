@@ -30,25 +30,44 @@ Compatible with the [Goby](https://www.goby.app/) Chrome extension. Full wallet 
 
 1. Find your LAN IP (e.g. `192.168.1.100`)
 2. In Goby extension settings, set the RPC URL to: `http://192.168.1.100:3000`
-3. Select the **Testnet** network in Goby (address prefix `txch`)
+3. Select the network in Goby that matches your `NETWORK_MODE`:
+   - `testnet11` → **Testnet** (address prefix `txch`)
+   - `mainnet` → **Mainnet** (address prefix `xch`)
 
 For production/remote access, put the API behind a reverse proxy with SSL (e.g. nginx + Let's Encrypt).
 
 ### Fund a test wallet
 
-Copy your Goby `txch1...` address and run:
+Copy your Goby address and run:
 ```bash
 curl -X POST http://192.168.1.100:3000/fund_wallet \
   -H "Content-Type: application/json" \
-  -d '{"address": "txch1...", "amount": 100}'
+  -d '{"address": "xch1...", "amount": 100}'
 ```
 
 ## Configuration
 
 | Variable | Default | Description |
 |---|---|---|
+| `NETWORK_MODE` | `testnet11` | Network identity: `testnet11` (txch) or `mainnet` (xch) |
 | `BLOCK_INTERVAL` | `5` | Seconds between blocks. `0` = instant confirmation on push_tx |
 | `FARM_ADDRESS` | _(built-in)_ | Override bech32 address for farming rewards |
+
+### Network Mode
+
+The simulator can identify as either **testnet11** or **mainnet**. This controls the genesis challenge, address prefix, and network name reported to wallets.
+
+```yaml
+environment:
+  NETWORK_MODE: "mainnet"    # or "testnet11"
+```
+
+| Mode | Prefix | Goby network |
+|---|---|---|
+| `testnet11` | `txch` | Testnet |
+| `mainnet` | `xch` | Mainnet |
+
+> **Note**: Switching modes on an existing volume automatically wipes the blockchain DB, since the genesis challenge is incompatible between modes.
 
 ### Block Interval Behavior
 
@@ -91,11 +110,11 @@ curl -X POST http://localhost:3000/set_config \
 
 ### Goby /v1/ (full wallet backend)
 - `POST /v1/chia_rpc` — RPC wrapper `{method, params}`
-- `GET /v1/utxos?address=txch1...` — Unspent coins
-- `GET /v1/balance?address=txch1...` — Total balance
+- `GET /v1/utxos?address=xch1...` — Unspent coins
+- `GET /v1/balance?address=xch1...` — Total balance
 - `POST /v1/sendtx` — Submit spend bundle
 - `POST /v1/fee_estimate` — Fee estimates
-- `GET /v1/assets?address=txch1...` — NFT/DID assets
+- `GET /v1/assets?address=xch1...` — NFT/DID assets
 - `GET /v1/latest_singleton?singleton_id=0x...` — Singleton tracking
 
 ### Simulator-only
@@ -113,16 +132,16 @@ curl -X POST http://localhost:3000/set_config \
 
 ## Persistent Data
 
-By default each container start uses a fresh blockchain. To persist data across restarts, uncomment the volume in `docker-compose.yml`:
+By default the blockchain data persists across restarts via a Docker volume. If the blockchain gets corrupted after a restart, nuke the volume and start fresh:
 
-```yaml
-volumes:
-  - chia-sim-data:/root/.chia
+```bash
+docker compose down -v
+docker compose up -d
 ```
 
 ## Network
 
-- Network: **testnet11** — the simulator is configured to identify as testnet11 (genesis challenge, signatures, network name) for compatibility with wallets that only support mainnet and testnet11 as network options
-- Address prefix: `txch`
-- Same RPC API as Chia mainnet fullnode
+- Network mode is configurable via `NETWORK_MODE`: **testnet11** (`txch`) or **mainnet** (`xch`)
+- The simulator patches its genesis challenge and network identity to match the selected mode, for compatibility with wallets like Goby
+- Same RPC API as a Chia fullnode
 - Port 3000: HTTP API + Web UI

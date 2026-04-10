@@ -5,12 +5,13 @@ services:
     ports:
       - "3000:3000"    # Coinset-compatible API + Web UI
     environment:
+      NETWORK_MODE: "mainnet"    # "testnet11" or "mainnet"
       BLOCK_INTERVAL: "5"       # Seconds between blocks (0 = instant on push_tx)
       FARM_ADDRESS: ""           # Override farming reward address (blank = use default)
     # Uncomment for persistent blockchain data across restarts:
-    # volumes:
-    #   - chia-sim-data:/root/.chia
+    volumes:
+      - chia-sim-data:/root/.chia
     restart: unless-stopped
 
-# volumes:
-#   chia-sim-data:
+volumes:
+  chia-sim-data:

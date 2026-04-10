@@ -4,6 +4,7 @@ import yaml
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
+from network_config import NET
 
 CHIA_ROOT = os.getenv("CHIA_ROOT", "/root/.chia/simulator/main")
 RUNTIME_CONFIG = "/tmp/sim_runtime.json"
@@ -54,7 +55,8 @@ def rpc(path: str, body: dict | None = None) -> dict:
     with urllib.request.urlopen(req, context=ctx, timeout=10) as r:
         resp = json.loads(r.read())
     if path == "get_network_info" and resp.get("network_name") == "simulator0":
-        resp["network_name"] = "testnet11"
+        resp["network_name"] = NET["network_name"]
+        resp["network_prefix"] = NET["network_prefix"]
     return resp
 
 
@@ -116,8 +118,8 @@ ENDPOINT_GROUPS = {
         {"name": "push_tx", "body": '{"spend_bundle": {}}', "desc": "Submit spend bundle"},
     ],
     "Simulator": [
-        {"name": "farm_block", "body": '{"address": "txch1...", "guarantee_tx_block": true}', "desc": "Farm a block"},
-        {"name": "fund_wallet", "body": '{"address": "txch1...", "amount": 10.0}', "desc": "Fund wallet with XCH"},
+        {"name": "farm_block", "body": '{"address": "' + NET["address_example"] + '", "guarantee_tx_block": true}', "desc": "Farm a block"},
+        {"name": "fund_wallet", "body": '{"address": "' + NET["address_example"] + '", "amount": 10.0}', "desc": "Fund wallet with XCH"},
         {"name": "set_auto_farming", "body": '{"auto_farm": true}', "desc": "Toggle auto-farming (use set_config instead)"},
         {"name": "get_auto_farming", "body": "{}", "desc": "Auto-farming status"},
         {"name": "revert_blocks", "body": '{"num_of_blocks": 1}', "desc": "Revert last N blocks"},
@@ -125,11 +127,11 @@ ENDPOINT_GROUPS = {
     ],
     "Goby v1": [
         {"name": "v1/chia_rpc", "body": '{"method": "get_blockchain_state", "params": {}}', "desc": "Goby RPC wrapper"},
-        {"name": "v1/utxos", "body": '{"address": "txch1..."}', "desc": "UTXOs for address"},
-        {"name": "v1/balance", "body": '{"address": "txch1..."}', "desc": "Balance for address"},
+        {"name": "v1/utxos", "body": '{"address": "' + NET["address_example"] + '"}', "desc": "UTXOs for address"},
+        {"name": "v1/balance", "body": '{"address": "' + NET["address_example"] + '"}', "desc": "Balance for address"},
         {"name": "v1/sendtx", "body": '{"spend_bundle": {}}', "desc": "Send transaction"},
         {"name": "v1/fee_estimate", "body": '{"cost": 1000000}', "desc": "Fee estimate"},
-        {"name": "v1/assets", "body": '{"address": "txch1..."}', "desc": "NFT/DID assets"},
+        {"name": "v1/assets", "body": '{"address": "' + NET["address_example"] + '"}', "desc": "NFT/DID assets"},
     ],
     "Config": [
         {"name": "get_config", "body": "{}", "desc": "Get simulator config"},
@@ -194,8 +196,8 @@ async def get_config(request: Request):
     cfg["auto_farm"] = cfg["block_interval"] == 0
     cfg["farm_address"] = FARM_ADDR
     cfg["rpc_port"] = RPC_PORT
-    cfg["network"] = "testnet11"
-    cfg["prefix"] = "txch"
+    cfg["network"] = NET["network_name"]
+    cfg["prefix"] = NET["network_prefix"]
     cfg["success"] = True
     return cfg
 
@@ -256,7 +258,7 @@ async def logs_api(lines: int = 50, level: str = ""):
 
 # --- Goby /v1/ endpoints ---
 
-NETWORK_PREFIX = "txch"
+NETWORK_PREFIX = NET["network_prefix"]
 
 RPC_WHITE_LIST = {
     "get_puzzle_and_solution", "get_coin_records_by_puzzle_hash",
