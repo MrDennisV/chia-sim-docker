@@ -200,6 +200,15 @@ async def health():
         return JSONResponse({"success": False, "error": str(e)}, 503)
 
 
+# --- WebSocket service ---
+# Mounts /ws with JSON-RPC 2.0 subscriptions (block peak, coins, puzzle hashes)
+# and RPC passthrough (same whitelist chia-gaming-connect already uses).
+from ws_endpoints import register_websocket
+
+_ws_poll_interval = float(os.getenv("WS_POLL_INTERVAL_MS", "1000")) / 1000.0
+register_websocket(app, rpc, interval=_ws_poll_interval)
+
+
 # --- Simulator RPC passthrough (farm_block, revert_blocks, etc.) ---
 # These are NOT in Goby's whitelist but useful for the simulator
 

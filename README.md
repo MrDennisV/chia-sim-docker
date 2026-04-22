@@ -138,6 +138,61 @@ curl -X POST http://localhost:3000/set_config \
 - `GET /logs/api?lines=50` — API request logs
 - `GET /healthz` — Health check with current block height
 
+### WebSocket — `ws://localhost:3000/ws`
+
+JSON-RPC 2.0 protocol for real-time subscriptions and RPC passthrough. Use this to avoid per-client polling — one server-side poller fans out events to every subscribed client.
+
+**RPC passthrough** (coinset-compatible method set; same as above):
+```json
+→ {"jsonrpc":"2.0","id":1,"method":"get_blockchain_state","params":{}}
+← {"jsonrpc":"2.0","id":1,"result":{"blockchain_state":{...},"success":true}}
+```
+
+**Subscriptions** — every `subscribe_*` response includes the current state so no follow-up `get` is needed:
+
+| Method | Params | Emits channel |
+|---|---|---|
+| `subscribe_block` | `{}` | `block.peak` on every new peak |
+| `subscribe_coins` | `{"coin_ids":["0x..."]}` | `coin.mempool.in`, `coin.mempool.out`, `coin.spent` |
+| `subscribe_puzzle_hashes` | `{"puzzle_hashes":["0x..."]}` | `coin.created`, `coin.spent` for any coin with that ph |
+| `unsubscribe_block` / `unsubscribe_coins` / `unsubscribe_puzzle_hashes` | optional list (empty = all) | — |
+
+**Event shape**:
+```json
+{"jsonrpc":"2.0","method":"event","params":{
+  "channel":"coin.spent",
+  "data":{"coin_id":"0x...","coin":{...},"spent_height":104}
+}}
+```
+
+| Channel | When | Source |
+|---|---|---|
+| `block.peak` | New peak height | `get_blockchain_state` poll |
+| `coin.spent` | Subscribed coin confirmed spent on-chain | `get_additions_and_removals` per new block |
+| `coin.created` | New on-chain coin for subscribed puzzle hash | `get_additions_and_removals` per new block |
+| `coin.mempool.in` | Mempool item spending subscribed coin just entered | `get_all_mempool_items` diff |
+| `coin.mempool.out` | That mempool item is gone (confirmed OR evicted) | `get_all_mempool_items` diff |
+
+**Reconnect pattern**: stateless. On reconnect the client re-issues its `subscribe_*` calls — the response returns the current state, so no events are effectively "lost" even if the disconnect spanned a block.
+
+**Tuning**:
+- `WS_POLL_INTERVAL_MS` (default `1000`) — how often the server polls the node. Lower = faster events at cost of node load. Useful to set to `250` when `BLOCK_INTERVAL=0` (auto-farm) so quick confirmations aren't missed by the diff.
+
+**Minimal client (JS)**:
+```js
+const ws = new WebSocket('ws://localhost:3000/ws');
+ws.onopen = () => {
+  ws.send(JSON.stringify({jsonrpc:"2.0",id:1,method:"subscribe_block"}));
+  ws.send(JSON.stringify({jsonrpc:"2.0",id:2,method:"subscribe_coins",
+                          params:{coin_ids:["0xabc..."]}}));
+};
+ws.onmessage = (ev) => {
+  const msg = JSON.parse(ev.data);
+  if (msg.method === "event") console.log(msg.params.channel, msg.params.data);
+  else console.log("response", msg.id, msg.result ?? msg.error);
+};
+```
+
 ## Persistent Data
 
 By default the blockchain data persists across restarts via a Docker volume. If the blockchain gets corrupted after a restart, nuke the volume and start fresh:
