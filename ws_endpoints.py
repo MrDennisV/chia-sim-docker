@@ -222,12 +222,23 @@ class Poller:
                 }
         except Exception as e:
             log.debug(f"coin_state on_chain for {coin_id}: {e}")
-        try:
-            mem = await self._call("get_mempool_items_by_coin_name", {"coin_name": coin_id})
-            items = mem.get("mempool_items") or []
-            out["in_mempool"] = [{"mempool_item_id": (it.get("spend_bundle_name") or "")} for it in items]
-        except Exception as e:
-            log.debug(f"coin_state mempool for {coin_id}: {e}")
+        # Scan our cached mempool snapshot for any item that touches this coin
+        # as a removal (being spent) OR as an addition (being created). The
+        # node's get_mempool_items_by_coin_name RPC only indexes by spent
+        # coin_id (chia/full_node/mempool.py::get_items_by_coin_id reads from
+        # the `spends` table), so it misses items that create the coin — which
+        # is exactly the reconnect case where a peer is watching a coin_id
+        # that another peer's pending bundle will produce. Scanning our cache
+        # mirrors the same _coins_touched_by_mempool_item logic used by the
+        # live event path (_tick_mempool), so the snapshot and live events
+        # agree by construction. Also saves one node round-trip per subscribe.
+        for bid, item in self.last_mempool_items.items():
+            removed, created = _coins_touched_by_mempool_item(item)
+            if coin_id in removed or any(cid == coin_id for cid, _ph in created):
+                out["in_mempool"].append({
+                    "mempool_item_id": bid,
+                    "item": item,
+                })
         return out
 
     async def start(self) -> None:
@@ -341,17 +352,22 @@ class Poller:
             except Exception:
                 continue
             ph = _hexnorm(coin.get("puzzle_hash", "")) if coin.get("puzzle_hash") else None
-            if not ph:
-                continue
-            subs = self.registry.puzzle_hash_subscribers(ph)
-            if not subs:
-                continue
             payload = _event("coin.created", {
                 "coin_id": cid,
                 "coin": coin,
                 "confirmed_height": height,
             })
-            await _broadcast(subs, payload, self.registry)
+            # Fan out to coin-id subscribers (clients waiting for a specific
+            # coin to hit the chain — coin_id is computable ahead of time) AND
+            # puzzle-hash subscribers. Dedupe by subscription identity.
+            targets: dict[int, Subscription] = {}
+            for s in self.registry.coin_subscribers(cid):
+                targets[id(s)] = s
+            if ph:
+                for s in self.registry.puzzle_hash_subscribers(ph):
+                    targets[id(s)] = s
+            if targets:
+                await _broadcast(targets.values(), payload, self.registry)
 
     async def _tick_mempool(self) -> None:
         mp = await self._call("get_all_mempool_items")
@@ -361,26 +377,38 @@ class Poller:
         exited = self.last_mempool_bundles - current
         for bid in entered:
             item = items.get(bid) or {}
-            removed, _created = _coins_touched_by_mempool_item(item)
-            for cid in removed:
+            removed, created = _coins_touched_by_mempool_item(item)
+            # Fan out to subscribers of any coin the bundle touches — both
+            # inputs (removed) and outputs (created). Covers the peer-waiting-
+            # for-not-yet-existing-coin case: if a bundle about to create a
+            # coin_id I'm watching hits the mempool, I want to know, symmetric
+            # with how coin.created fans out to coin-id subs for block events.
+            touched = set(removed) | {cid for cid, _ph in created}
+            for cid in touched:
                 subs = self.registry.coin_subscribers(cid)
                 if not subs:
                     continue
+                # `item` carries the full mempool entry including spend_bundle
+                # so subscribers don't need a follow-up get_mempool_item_by_tx_id
+                # to inspect the spends. Worth the frame size in a local sim.
                 payload = _event("coin.mempool.in", {
                     "coin_id": cid,
                     "mempool_item_id": bid,
+                    "item": item,
                 })
                 await _broadcast(subs, payload, self.registry)
         for bid in exited:
             item = self.last_mempool_items.get(bid) or {}
-            removed, _created = _coins_touched_by_mempool_item(item)
-            for cid in removed:
+            removed, created = _coins_touched_by_mempool_item(item)
+            touched = set(removed) | {cid for cid, _ph in created}
+            for cid in touched:
                 subs = self.registry.coin_subscribers(cid)
                 if not subs:
                     continue
                 payload = _event("coin.mempool.out", {
                     "coin_id": cid,
                     "mempool_item_id": bid,
+                    "item": item,
                 })
                 await _broadcast(subs, payload, self.registry)
         self.last_mempool_bundles = current
