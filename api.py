@@ -9,7 +9,8 @@ import yaml
 os.chdir("/app")
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse, Response
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
 # Import Goby app and mount it
@@ -200,6 +201,15 @@ async def health():
         return JSONResponse({"success": False, "error": str(e)}, 503)
 
 
+# --- WebSocket service ---
+# Mounts /ws with JSON-RPC 2.0 subscriptions (block peak, coins, puzzle hashes)
+# and RPC passthrough (same whitelist chia-gaming-connect already uses).
+from ws_endpoints import register_websocket, WS_RPC_METHODS
+
+_ws_poll_interval = float(os.getenv("WS_POLL_INTERVAL_MS", "1000")) / 1000.0
+register_websocket(app, rpc, interval=_ws_poll_interval)
+
+
 # --- Simulator RPC passthrough (farm_block, revert_blocks, etc.) ---
 # These are NOT in Goby's whitelist but useful for the simulator
 
@@ -266,169 +276,27 @@ ENDPOINT_GROUPS = {
 }
 
 
-@app.get("/", response_class=HTMLResponse)
-async def ui():
-    groups_json = json.dumps(ENDPOINT_GROUPS)
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Chia Simulator API</title>
-<style>
-:root {{
-  --bg:#0f1117;--surface:#1a1d27;--border:#2a2d3a;--text:#e1e4ed;
-  --muted:#8b8fa3;--accent:#22c55e;--accent2:#3b82f6;--red:#ef4444;
-  --sim:#f59e0b;--cfg:#a78bfa;
-  --font:'SF Mono','Cascadia Code','Fira Code','Courier New',monospace;
-}}
-*{{margin:0;padding:0;box-sizing:border-box}}
-body{{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px}}
-.layout{{display:flex;height:100vh}}
-.sidebar{{width:260px;min-width:260px;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}}
-.sidebar-head{{padding:14px 16px 10px;border-bottom:1px solid var(--border)}}
-.sidebar-head h1{{font-size:13px;color:var(--accent);font-weight:600}}
-.sidebar-head h1 span{{color:var(--muted);font-weight:400}}
-.nav-scroll{{flex:1;overflow-y:auto;padding:4px 0}}
-.group-title{{font-size:9px;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted);padding:12px 14px 4px;font-weight:700}}
-.ep-btn{{display:block;width:100%;text-align:left;background:none;border:none;color:var(--text);padding:7px 14px;cursor:pointer;font-family:var(--font);font-size:11px;transition:background .1s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
-.ep-btn:hover{{background:var(--border)}}
-.ep-btn.active{{background:var(--border);color:var(--accent)}}
-.badge{{display:inline-block;font-size:8px;padding:1px 4px;border-radius:3px;margin-right:5px;font-weight:700;vertical-align:middle}}
-.badge-post{{background:#22c55e18;color:var(--accent)}}
-.badge-sim{{background:#f59e0b18;color:var(--sim)}}
-.badge-cfg{{background:#a78bfa18;color:var(--cfg)}}
-.badge-goby{{background:#3b82f618;color:var(--accent2)}}
-.health{{padding:8px 14px;border-top:1px solid var(--border);font-size:10px;color:var(--muted);display:flex;align-items:center;gap:6px}}
-.dot{{width:7px;height:7px;border-radius:50%;background:var(--accent);flex-shrink:0}}
-.dot.off{{background:var(--red)}}
-.main{{flex:1;display:flex;flex-direction:column;overflow:hidden}}
-.topbar{{padding:10px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;background:var(--surface);flex-wrap:wrap;min-height:42px}}
-.topbar .method{{color:var(--accent);font-weight:700;font-size:11px}}
-.topbar .path{{color:var(--text);font-size:12px}}
-.topbar .desc{{color:var(--muted);font-size:10px;margin-left:auto}}
-.content{{flex:1;display:flex;overflow:hidden}}
-.editor-pane,.result-pane{{flex:1;display:flex;flex-direction:column;overflow:hidden}}
-.editor-pane{{border-right:1px solid var(--border)}}
-.pane-header{{padding:6px 12px;font-size:9px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);border-bottom:1px solid var(--border);background:var(--surface);display:flex;align-items:center;justify-content:space-between;gap:6px;flex-shrink:0}}
-textarea{{flex:1;background:var(--bg);color:var(--text);border:none;padding:10px 12px;font-family:var(--font);font-size:12px;resize:none;outline:none;width:100%;min-height:60px}}
-pre{{flex:1;background:var(--bg);color:var(--text);padding:10px 12px;overflow:auto;font-family:var(--font);font-size:11px;white-space:pre-wrap;word-break:break-all}}
-.send-btn{{background:var(--accent);color:#000;border:none;padding:6px 16px;border-radius:4px;cursor:pointer;font-family:var(--font);font-size:11px;font-weight:700}}
-.send-btn:hover{{opacity:.85}}
-.send-btn:disabled{{opacity:.5;cursor:wait}}
-.status{{font-size:10px;padding:0 6px}}
-.status.ok{{color:var(--accent)}}
-.status.err{{color:var(--red)}}
-.menu-toggle{{display:none;background:none;border:none;color:var(--text);font-size:20px;cursor:pointer;padding:10px 14px;position:fixed;top:0;left:0;z-index:101}}
-.overlay{{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99}}
-.overlay.open{{display:block}}
-@media(max-width:768px){{
-  .menu-toggle{{display:block}}
-  .sidebar{{position:fixed;top:0;left:-100%;width:80vw;min-width:auto;height:100vh;z-index:100;transition:left .2s ease;padding-top:44px}}
-  .sidebar.open{{left:0}}
-  .topbar{{padding:10px 10px 10px 44px}}
-  .topbar .desc{{display:none}}
-  .content{{flex-direction:column}}
-  .editor-pane{{border-right:none;border-bottom:1px solid var(--border);max-height:35vh;min-height:100px}}
-  .result-pane{{min-height:0}}
-  .ep-btn{{padding:10px 14px;font-size:12px}}
-  .group-title{{font-size:10px}}
-  textarea{{font-size:13px}}
-  pre{{font-size:11px}}
-}}
-</style>
-</head>
-<body>
-<div class="layout">
-  <button class="menu-toggle" id="menuBtn" onclick="toggleMenu()">&#9776;</button>
-  <div class="overlay" id="overlay" onclick="toggleMenu()"></div>
-  <div class="sidebar" id="sidebar">
-    <div class="sidebar-head"><h1>Chia Simulator <span>+ Goby</span></h1></div>
-    <div class="nav-scroll" id="nav"></div>
-    <div class="health"><div class="dot" id="healthDot"></div><span id="healthText">connecting...</span></div>
-  </div>
-  <div class="main">
-    <div class="topbar">
-      <span class="method">POST</span>
-      <span class="path" id="epPath">/get_blockchain_state</span>
-      <span class="desc" id="epDesc">Current blockchain state</span>
-    </div>
-    <div class="content">
-      <div class="editor-pane">
-        <div class="pane-header">
-          <span>Request Body</span>
-          <div style="display:flex;align-items:center;gap:6px">
-            <button class="send-btn" id="sendBtn" onclick="send()">Send</button>
-            <span class="status" id="status"></span>
-          </div>
-        </div>
-        <textarea id="reqBody">{{}}</textarea>
-      </div>
-      <div class="result-pane">
-        <div class="pane-header"><span>Response</span><span id="timing"></span></div>
-        <pre id="resBody">Select an endpoint and press Send (or Ctrl+Enter)</pre>
-      </div>
-    </div>
-  </div>
-</div>
-<script>
-const G={groups_json};
-let cur='get_blockchain_state';
-const simEps=['farm_block','revert_blocks','get_all_puzzle_hashes','fund_wallet'];
-const cfgEps=['get_config','set_config'];
-const gobyEps=['v1/chia_rpc','v1/utxos','v1/balance','v1/sendtx','v1/fee_estimate','v1/assets'];
-const getEps=['logs/node','logs/api','v1/utxos','v1/balance','v1/assets'];
+# --- Web UI ---
+# Dynamic config endpoint must be registered BEFORE mount so it wins routing.
+@app.get("/web/config.js", response_class=Response)
+async def ui_config():
+    payload = {
+        "groups": ENDPOINT_GROUPS,
+        "ws_methods": sorted(WS_RPC_METHODS),
+        "network": NET["network_name"],
+        "prefix": NET["network_prefix"],
+    }
+    js = "window.__CONFIG__ = " + json.dumps(payload) + ";"
+    return Response(content=js, media_type="application/javascript")
 
-function buildNav(){{
-  const nav=document.getElementById('nav');
-  let html='';
-  for(const[group,eps]of Object.entries(G)){{
-    html+='<div class="group-title">'+group+'</div>';
-    for(const ep of eps){{
-      const isSim=simEps.includes(ep.name),isCfg=cfgEps.includes(ep.name),isGoby=gobyEps.includes(ep.name);
-      const isGet=getEps.includes(ep.name);
-      const bc=isGoby?'badge-goby':isCfg?'badge-cfg':isSim?'badge-sim':'badge-post';
-      const bl=isGet?'GET':isGoby?'GOBY':isCfg?'CFG':isSim?'SIM':'POST';
-      const esc=ep.body.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-      html+='<button class="ep-btn'+(ep.name===cur?' active':'')+'" data-ep="'+ep.name+'" data-body="'+esc+'" data-desc="'+ep.desc+'" onclick="sel(this)"><span class="badge '+bc+'">'+bl+'</span>'+ep.name+'</button>';
-    }}
-  }}
-  nav.innerHTML=html;
-}}
-function toggleMenu(){{document.getElementById('sidebar').classList.toggle('open');document.getElementById('overlay').classList.toggle('open')}}
-function sel(btn){{
-  document.querySelectorAll('.ep-btn').forEach(b=>b.classList.remove('active'));
-  btn.classList.add('active');cur=btn.dataset.ep;
-  document.getElementById('epPath').textContent='/'+cur;
-  document.getElementById('epDesc').textContent=btn.dataset.desc;
-  document.querySelector('.topbar .method').textContent=getEps.includes(cur)?'GET':'POST';
-  try{{document.getElementById('reqBody').value=JSON.stringify(JSON.parse(btn.dataset.body),null,2)}}
-  catch{{document.getElementById('reqBody').value=btn.dataset.body}}
-  document.getElementById('resBody').textContent='';document.getElementById('status').textContent='';document.getElementById('timing').textContent='';
-  if(window.innerWidth<=768)toggleMenu();
-}}
-async function send(){{
-  const btn=document.getElementById('sendBtn'),st=document.getElementById('status'),tm=document.getElementById('timing');
-  btn.disabled=true;st.textContent='';const t0=performance.now();
-  try{{
-    const body=document.getElementById('reqBody').value.trim();let r;
-    if(getEps.includes(cur)){{let qs='';try{{const p=JSON.parse(body||'{{}}');qs='?'+new URLSearchParams(p).toString()}}catch{{}}r=await fetch('/'+cur+qs)}}
-    else{{r=await fetch('/'+cur,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:body||'{{}}'}})}}
-    const d=await r.json();const ms=Math.round(performance.now()-t0);
-    tm.textContent=ms+'ms';document.getElementById('resBody').textContent=JSON.stringify(d,null,2);
-    st.className='status '+(d.success!==false?'ok':'err');st.textContent=d.success!==false?'OK':'ERR';
-  }}catch(e){{document.getElementById('resBody').textContent=e.toString();st.className='status err';st.textContent='ERR';tm.textContent=Math.round(performance.now()-t0)+'ms'}}
-  btn.disabled=false;
-}}
-async function checkHealth(){{
-  try{{const r=await fetch('/healthz');const d=await r.json();document.getElementById('healthDot').className='dot'+(d.success?'':' off');document.getElementById('healthText').textContent=d.success?'Height: '+d.height:'offline'}}
-  catch{{document.getElementById('healthDot').className='dot off';document.getElementById('healthText').textContent='offline'}}
-}}
-document.getElementById('reqBody').addEventListener('keydown',e=>{{if((e.metaKey||e.ctrlKey)&&e.key==='Enter')send()}});
-buildNav();checkHealth();setInterval(checkHealth,5000);
-</script>
-</body>
-</html>"""
+
+@app.get("/", response_class=HTMLResponse)
+async def ui_index():
+    return FileResponse("/app/web/index.html")
+
+
+app.mount("/web", StaticFiles(directory="/app/web"), name="web")
+
 
 
 # --- Coinset-compatible catch-all (MUST be last) ---
