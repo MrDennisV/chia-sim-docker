@@ -372,8 +372,14 @@ class Poller:
         exited = self.last_mempool_bundles - current
         for bid in entered:
             item = items.get(bid) or {}
-            removed, _created = _coins_touched_by_mempool_item(item)
-            for cid in removed:
+            removed, created = _coins_touched_by_mempool_item(item)
+            # Fan out to subscribers of any coin the bundle touches — both
+            # inputs (removed) and outputs (created). Covers the peer-waiting-
+            # for-not-yet-existing-coin case: if a bundle about to create a
+            # coin_id I'm watching hits the mempool, I want to know, symmetric
+            # with how coin.created fans out to coin-id subs for block events.
+            touched = set(removed) | {cid for cid, _ph in created}
+            for cid in touched:
                 subs = self.registry.coin_subscribers(cid)
                 if not subs:
                     continue
@@ -388,8 +394,9 @@ class Poller:
                 await _broadcast(subs, payload, self.registry)
         for bid in exited:
             item = self.last_mempool_items.get(bid) or {}
-            removed, _created = _coins_touched_by_mempool_item(item)
-            for cid in removed:
+            removed, created = _coins_touched_by_mempool_item(item)
+            touched = set(removed) | {cid for cid, _ph in created}
+            for cid in touched:
                 subs = self.registry.coin_subscribers(cid)
                 if not subs:
                     continue
