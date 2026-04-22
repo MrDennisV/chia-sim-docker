@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chia Simulator API</title>
+  <link rel="stylesheet" href="/web/app.css">
+</head>
+<body>
+<div class="app">
+  <div class="tabbar">
+    <h1>Chia Simulator <span>+ Goby</span></h1>
+    <button class="tab-btn active" data-tab="rest" onclick="switchTab('rest')">REST</button>
+    <button class="tab-btn" data-tab="ws" onclick="switchTab('ws')">WebSocket</button>
+    <div class="tabbar-health">
+      <div class="dot" id="healthDot"></div>
+      <span id="healthText">connecting...</span>
+    </div>
+  </div>
+
+  <!-- REST tab -->
+  <div class="tab-pane" id="tab-rest">
+    <div class="overlay" id="overlayRest" onclick="toggleMenu('sidebar','overlayRest')"></div>
+    <div class="layout">
+      <div class="sidebar" id="sidebar">
+        <div class="sidebar-head"><h2>Endpoints</h2></div>
+        <div class="nav-scroll" id="nav"></div>
+      </div>
+      <div class="main">
+        <div class="topbar">
+          <button class="menu-toggle" onclick="toggleMenu('sidebar','overlayRest')">&#9776;</button>
+          <span class="method">POST</span>
+          <span class="path" id="epPath">/get_blockchain_state</span>
+          <span class="desc" id="epDesc">Current blockchain state</span>
+        </div>
+        <div class="content">
+          <div class="editor-pane">
+            <div class="pane-header">
+              <span>Request Body</span>
+              <div style="display:flex;align-items:center;gap:6px">
+                <button class="send-btn" id="sendBtn" onclick="restSend()">Send</button>
+                <span class="status" id="status"></span>
+              </div>
+            </div>
+            <textarea id="reqBody">{}</textarea>
+          </div>
+          <div class="result-pane">
+            <div class="pane-header"><span>Response</span><span id="timing"></span></div>
+            <pre id="resBody">Select an endpoint and press Send (or Ctrl+Enter)</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- WS tab -->
+  <div class="tab-pane hidden" id="tab-ws">
+    <div class="overlay" id="overlayWs" onclick="toggleMenu('wsSide','overlayWs')"></div>
+    <div class="ws-layout">
+      <div class="ws-side" id="wsSide">
+        <div class="ws-conn">
+          <div class="dot off" id="wsDot"></div>
+          <div class="url" id="wsUrl">ws://…/ws</div>
+          <button class="ws-btn primary" id="wsConnBtn" onclick="wsToggleConn()">Connect</button>
+        </div>
+        <div class="ws-scroll">
+
+          <div class="ws-section">
+            <h3>Subscribe · Block</h3>
+            <div class="ws-row">
+              <button class="ws-btn primary" onclick="wsSubBlock(true)">Subscribe</button>
+              <button class="ws-btn danger" onclick="wsSubBlock(false)">Unsubscribe</button>
+            </div>
+          </div>
+
+          <div class="ws-section">
+            <h3>Subscribe · Coins</h3>
+            <label class="ws-label">coin_ids (comma-separated 0x…)</label>
+            <textarea class="ws-param" id="wsCoinIds" placeholder="0xabc…, 0xdef…"></textarea>
+            <div class="ws-row" style="margin-top:6px">
+              <button class="ws-btn primary" onclick="wsSubCoins(true)">Subscribe</button>
+              <button class="ws-btn danger" onclick="wsSubCoins(false)">Unsubscribe</button>
+            </div>
+          </div>
+
+          <div class="ws-section">
+            <h3>Subscribe · Puzzle hashes</h3>
+            <label class="ws-label">puzzle_hashes (comma-separated 0x…)</label>
+            <textarea class="ws-param" id="wsPHs" placeholder="0x…, 0x…"></textarea>
+            <div class="ws-row" style="margin-top:6px">
+              <button class="ws-btn primary" onclick="wsSubPHs(true)">Subscribe</button>
+              <button class="ws-btn danger" onclick="wsSubPHs(false)">Unsubscribe</button>
+            </div>
+          </div>
+
+          <div class="ws-section">
+            <h3>RPC Invoke</h3>
+            <div class="ws-row"><select id="wsRpcMethod"></select></div>
+            <label class="ws-label" style="margin-top:4px">params (JSON)</label>
+            <textarea class="ws-param" id="wsRpcParams">{}</textarea>
+            <div class="ws-row" style="margin-top:6px">
+              <button class="ws-btn primary" onclick="wsInvoke()">Send</button>
+            </div>
+          </div>
+
+          <div class="ws-section">
+            <h3>Active subscriptions</h3>
+            <div class="ws-activebox" id="wsActive">none</div>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="ws-main">
+        <div class="topbar">
+          <button class="menu-toggle" onclick="toggleMenu('wsSide','overlayWs')">&#9776;</button>
+          <span class="method" style="color:var(--ws)">WS</span>
+          <span class="path">/ws — JSON-RPC 2.0</span>
+          <span class="desc" id="wsStats"></span>
+        </div>
+        <div class="pane-header">
+          <span>Event Feed</span>
+          <button class="ws-btn" onclick="wsClearFeed()">Clear</button>
+        </div>
+        <div class="ws-feed" id="wsFeed"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/web/config.js"></script>
+<script src="/web/app.js"></script>
+</body>
+</html>

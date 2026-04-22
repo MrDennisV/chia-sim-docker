@@ -71,6 +71,7 @@ COPY openapi/ /app/openapi/
 COPY settings.toml /app/settings.toml
 COPY api.py /app/api.py
 COPY ws_endpoints.py /app/ws_endpoints.py
+COPY web/ /app/web/
 COPY entrypoint.sh /entrypoint.sh
 RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
 RUN mkdir -p /app/data /app/logs
