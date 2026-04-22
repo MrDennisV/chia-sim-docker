@@ -165,13 +165,17 @@ JSON-RPC 2.0 protocol for real-time subscriptions and RPC passthrough. Use this 
 }}
 ```
 
-| Channel | When | Source |
-|---|---|---|
-| `block.peak` | New peak height | `get_blockchain_state` poll |
-| `coin.spent` | Subscribed coin confirmed spent on-chain | `get_additions_and_removals` per new block |
-| `coin.created` | New on-chain coin for subscribed puzzle hash | `get_additions_and_removals` per new block |
-| `coin.mempool.in` | Mempool item spending subscribed coin just entered | `get_all_mempool_items` diff |
-| `coin.mempool.out` | That mempool item is gone (confirmed OR evicted) | `get_all_mempool_items` diff |
+| Channel | When | Source | Fires for |
+|---|---|---|---|
+| `block.peak` | New peak height | `get_blockchain_state` poll | `subscribe_block` |
+| `coin.spent` | Coin confirmed spent on-chain | `get_additions_and_removals` per new block | `subscribe_coins` (by coin_id) + `subscribe_puzzle_hashes` |
+| `coin.created` | New on-chain coin appears | `get_additions_and_removals` per new block | `subscribe_coins` (by coin_id) + `subscribe_puzzle_hashes` |
+| `coin.mempool.in` | Mempool item spending subscribed coin just entered | `get_all_mempool_items` diff | `subscribe_coins` |
+| `coin.mempool.out` | That mempool item is gone (confirmed OR evicted) | `get_all_mempool_items` diff | `subscribe_coins` |
+
+`coin.mempool.in` / `coin.mempool.out` include the full mempool item (spend_bundle, removals, additions, fee, etc.) under `data.item`, so clients don't need a follow-up `get_mempool_item_by_tx_id`.
+
+`coin.created` fires for coin-id subscribers even for coins that don't exist yet: Chia coin_ids are computable ahead of time (`sha256(parent || puzzle_hash || amount)`), so a client can subscribe to a coin that its own pending tx will create and be notified on confirmation without polling.
 
 **Reconnect pattern**: stateless. On reconnect the client re-issues its `subscribe_*` calls — the response returns the current state, so no events are effectively "lost" even if the disconnect spanned a block.
 

@@ -225,7 +225,13 @@ class Poller:
         try:
             mem = await self._call("get_mempool_items_by_coin_name", {"coin_name": coin_id})
             items = mem.get("mempool_items") or []
-            out["in_mempool"] = [{"mempool_item_id": (it.get("spend_bundle_name") or "")} for it in items]
+            # Include the full item (spend_bundle, removals, etc.) so a client
+            # reconnecting to a coin that's already in-mempool can reconstruct
+            # its pending-bundle state without a follow-up RPC.
+            out["in_mempool"] = [
+                {"mempool_item_id": it.get("spend_bundle_name") or "", "item": it}
+                for it in items
+            ]
         except Exception as e:
             log.debug(f"coin_state mempool for {coin_id}: {e}")
         return out
@@ -341,17 +347,22 @@ class Poller:
             except Exception:
                 continue
             ph = _hexnorm(coin.get("puzzle_hash", "")) if coin.get("puzzle_hash") else None
-            if not ph:
-                continue
-            subs = self.registry.puzzle_hash_subscribers(ph)
-            if not subs:
-                continue
             payload = _event("coin.created", {
                 "coin_id": cid,
                 "coin": coin,
                 "confirmed_height": height,
             })
-            await _broadcast(subs, payload, self.registry)
+            # Fan out to coin-id subscribers (clients waiting for a specific
+            # coin to hit the chain — coin_id is computable ahead of time) AND
+            # puzzle-hash subscribers. Dedupe by subscription identity.
+            targets: dict[int, Subscription] = {}
+            for s in self.registry.coin_subscribers(cid):
+                targets[id(s)] = s
+            if ph:
+                for s in self.registry.puzzle_hash_subscribers(ph):
+                    targets[id(s)] = s
+            if targets:
+                await _broadcast(targets.values(), payload, self.registry)
 
     async def _tick_mempool(self) -> None:
         mp = await self._call("get_all_mempool_items")
@@ -366,9 +377,13 @@ class Poller:
                 subs = self.registry.coin_subscribers(cid)
                 if not subs:
                     continue
+                # `item` carries the full mempool entry including spend_bundle
+                # so subscribers don't need a follow-up get_mempool_item_by_tx_id
+                # to inspect the spends. Worth the frame size in a local sim.
                 payload = _event("coin.mempool.in", {
                     "coin_id": cid,
                     "mempool_item_id": bid,
+                    "item": item,
                 })
                 await _broadcast(subs, payload, self.registry)
         for bid in exited:
@@ -381,6 +396,7 @@ class Poller:
                 payload = _event("coin.mempool.out", {
                     "coin_id": cid,
                     "mempool_item_id": bid,
+                    "item": item,
                 })
                 await _broadcast(subs, payload, self.registry)
         self.last_mempool_bundles = current
