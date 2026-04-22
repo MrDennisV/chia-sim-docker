@@ -222,18 +222,23 @@ class Poller:
                 }
         except Exception as e:
             log.debug(f"coin_state on_chain for {coin_id}: {e}")
-        try:
-            mem = await self._call("get_mempool_items_by_coin_name", {"coin_name": coin_id})
-            items = mem.get("mempool_items") or []
-            # Include the full item (spend_bundle, removals, etc.) so a client
-            # reconnecting to a coin that's already in-mempool can reconstruct
-            # its pending-bundle state without a follow-up RPC.
-            out["in_mempool"] = [
-                {"mempool_item_id": it.get("spend_bundle_name") or "", "item": it}
-                for it in items
-            ]
-        except Exception as e:
-            log.debug(f"coin_state mempool for {coin_id}: {e}")
+        # Scan our cached mempool snapshot for any item that touches this coin
+        # as a removal (being spent) OR as an addition (being created). The
+        # node's get_mempool_items_by_coin_name RPC only indexes by spent
+        # coin_id (chia/full_node/mempool.py::get_items_by_coin_id reads from
+        # the `spends` table), so it misses items that create the coin — which
+        # is exactly the reconnect case where a peer is watching a coin_id
+        # that another peer's pending bundle will produce. Scanning our cache
+        # mirrors the same _coins_touched_by_mempool_item logic used by the
+        # live event path (_tick_mempool), so the snapshot and live events
+        # agree by construction. Also saves one node round-trip per subscribe.
+        for bid, item in self.last_mempool_items.items():
+            removed, created = _coins_touched_by_mempool_item(item)
+            if coin_id in removed or any(cid == coin_id for cid, _ph in created):
+                out["in_mempool"].append({
+                    "mempool_item_id": bid,
+                    "item": item,
+                })
         return out
 
     async def start(self) -> None:
