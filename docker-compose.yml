@@ -8,6 +8,10 @@ services:
       NETWORK_MODE: "mainnet"    # "testnet11" or "mainnet"
       BLOCK_INTERVAL: "5"       # Seconds between blocks (0 = instant on push_tx)
       FARM_ADDRESS: ""           # Override farming reward address (blank = use default)
+      # Prefund addresses on fresh chain only (skipped if chain has blocks).
+      # Comma-separated list. Prefix must match NETWORK_MODE (xch/txch).
+      PREFUND_ADDRESSES: "xch18muueqh026amp0phjm6sfrath7qtru5dw44kz3p6pfa8005rpteqcz6l9x,xch1rc0qtv9wrrmnxeezv89nrfjjemfel9p8q3z0egzjpptmtr9hxp2swjgc2p"
+      PREFUND_AMOUNT: "100"      # XCH per prefunded address
     # Uncomment for persistent blockchain data across restarts:
     volumes:
       - chia-sim-data:/root/.chia

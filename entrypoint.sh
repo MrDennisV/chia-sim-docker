@@ -100,6 +100,41 @@ else
     echo "Mode: periodic farm every ${BLOCK_INTERVAL}s (tx stays in mempool)"
 fi
 
+# Prefund addresses on fresh chain only (PREFUND_ADDRESSES=comma-separated list, PREFUND_AMOUNT=XCH per address)
+if [ -n "$PREFUND_ADDRESSES" ]; then
+    PREFUND_AMOUNT=${PREFUND_AMOUNT:-100}
+    CURRENT_HEIGHT=$(chia rpc full_node get_blockchain_state 2>/dev/null | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    peak = d.get('blockchain_state', {}).get('peak')
+    print(peak.get('height', 0) if peak else 0)
+except Exception:
+    print(0)
+" 2>/dev/null || echo "0")
+
+    if [ "$CURRENT_HEIGHT" = "0" ]; then
+        BLOCKS_PER_ADDR=$(( (PREFUND_AMOUNT + 1) / 2 ))
+        [ "$BLOCKS_PER_ADDR" -lt 1 ] && BLOCKS_PER_ADDR=1
+        echo "Prefunding addresses with ${PREFUND_AMOUNT} XCH each (${BLOCKS_PER_ADDR} blocks per address)..."
+        IFS=',' read -ra _ADDRS <<< "$PREFUND_ADDRESSES"
+        for _addr in "${_ADDRS[@]}"; do
+            _addr=$(echo "$_addr" | xargs)
+            [ -z "$_addr" ] && continue
+            echo "  -> $_addr"
+            for _i in $(seq 1 "$BLOCKS_PER_ADDR"); do
+                if ! chia rpc full_node farm_block "{\"address\":\"$_addr\",\"guarantee_tx_block\":true}" >/dev/null 2>&1; then
+                    echo "     WARN: farm_block failed for $_addr (check prefix matches NETWORK_MODE=$NETWORK_MODE)"
+                    break
+                fi
+            done
+        done
+        echo "Prefund complete."
+    else
+        echo "Prefund skipped: chain already has $CURRENT_HEIGHT blocks"
+    fi
+fi
+
 # Determine farm address: env override or from config
 if [ -n "$FARM_ADDRESS" ]; then
     FARM_ADDR="$FARM_ADDRESS"

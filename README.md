@@ -52,6 +52,14 @@ curl -X POST http://192.168.1.100:3000/fund_wallet \
 | `NETWORK_MODE` | `testnet11` | Network identity: `testnet11` (txch) or `mainnet` (xch) |
 | `BLOCK_INTERVAL` | `5` | Seconds between blocks. `0` = instant confirmation on push_tx |
 | `FARM_ADDRESS` | _(built-in)_ | Override bech32 address for farming rewards |
+| `PREFUND_ADDRESSES` | _(empty)_ | Comma-separated bech32 addresses to prefund on **fresh chain only** |
+| `PREFUND_AMOUNT` | `100` | XCH credited to each prefunded address (rounded up to blocks of 2 XCH) |
+
+### Prefunding addresses
+
+Set `PREFUND_ADDRESSES` to a comma-separated list and they will be automatically funded with `PREFUND_AMOUNT` XCH each on the **first startup only** (when the blockchain is empty, height 0). On subsequent restarts (or when the volume is preserved), prefunding is skipped so balances don't accumulate. Wipe the volume (`docker compose down -v`) to reset and re-prefund.
+
+Addresses must use the prefix matching `NETWORK_MODE` (`xch` for mainnet, `txch` for testnet11); mismatched addresses are skipped with a warning.
 
 ### Network Mode
 
